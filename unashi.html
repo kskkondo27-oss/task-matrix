@@ -199,12 +199,18 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
 .list-ov.open .list-modal{transform:translateY(0)}
 .list-mhd{display:flex;align-items:center;justify-content:space-between;padding:18px 22px 14px;border-bottom:1px solid var(--card-border);flex-shrink:0}
 .list-mttl{font-size:16px;font-weight:700}
-.list-mbd{flex:1;overflow-y:auto;padding:12px 16px}
-.list-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--card-border);border-radius:10px;margin-bottom:8px;cursor:pointer;transition:box-shadow .15s,border-color .15s}
+.list-mbd{flex:1;overflow-y:auto;padding:12px 16px;max-height:520px}
+.list-row{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--card-border);border-radius:10px;margin-bottom:8px;cursor:pointer;transition:box-shadow .15s,border-color .15s;position:relative}
 .list-row:hover{box-shadow:0 2px 8px rgba(16,24,40,.08);border-color:#c4cad3}
 .list-row.lc{opacity:.5}
 .list-row.alert-today{background:#FEE2E2;border-color:#fca5a5}
 .list-row.alert-tomorrow{background:#FEF3C7;border-color:#fcd34d}
+.list-row.list-dragging{opacity:.35;border-style:dashed;box-shadow:none}
+.list-row.over-top::before{content:"";position:absolute;top:-4px;left:0;right:0;height:3px;background:var(--indigo);border-radius:3px;pointer-events:none}
+.list-row.over-bottom::after{content:"";position:absolute;bottom:-4px;left:0;right:0;height:3px;background:var(--indigo);border-radius:3px;pointer-events:none}
+.list-handle{color:var(--text-muted);cursor:grab;font-size:16px;flex-shrink:0;opacity:.35;transition:opacity .15s;padding:0 2px;line-height:1;user-select:none}
+.list-row:hover .list-handle{opacity:.7}
+.list-handle:active{cursor:grabbing}
 .list-chk{width:17px;height:17px;border:2px solid #d1d5db;border-radius:5px;flex-shrink:0;cursor:pointer;display:grid;place-items:center;transition:all .15s;background:#fff}
 .list-chk.done{background:#16a34a;border-color:#16a34a}
 .list-chk.done::after{content:"✓";font-size:10px;font-weight:800;color:#fff}
@@ -984,6 +990,8 @@ function collectActions(){
    一覧モーダル
 ===================================================== */
 var LIST_Q=null;
+var LIST_DRAG=null;
+
 function openListModal(q){
   LIST_Q=q;
   var labelEl=document.querySelector('.editable[data-key="'+q.toLowerCase()+'-title"]');
@@ -1008,11 +1016,21 @@ function makeListRow(task,q){
   var al=task.isCompleted?'':alertStatus(task.dueDate);
   var row=document.createElement('div');
   row.className='list-row'+(task.isCompleted?' lc':'')+(al?' '+al:'');
+  row.setAttribute('draggable','true');
+  row.setAttribute('data-id',task.id);
+
+  // ドラッグハンドル
+  var handle=document.createElement('span');
+  handle.className='list-handle';handle.textContent='⠿';handle.title='ドラッグで並び替え';
+
+  // 完了チェック
   var chk=document.createElement('div');
   chk.className='list-chk'+(task.isCompleted?' done':'');
   chk.addEventListener('click',function(e){
     e.stopPropagation();STATE.toggleDone(task.id);renderMatrix();renderListModal(q);
   });
+
+  // 情報
   var info=document.createElement('div');info.className='list-info';
   var sub='';
   if(task.owner)sub+='<span>👤 '+esc(task.owner)+'</span>';
@@ -1020,12 +1038,50 @@ function makeListRow(task,q){
   if(total)sub+='<span>'+done+'/'+total+' 完了</span>';
   if(task.taskMemo)sub+='<span>📝 メモあり</span>';
   info.innerHTML='<div class="list-ttl'+(task.isCompleted?' done':'')+'">'+esc(task.title)+'</div><div class="list-sub">'+sub+'</div>';
-  row.appendChild(chk);row.appendChild(info);
-  row.addEventListener('click',function(){closeListModal();openEdit(task.id);});
+
+  row.appendChild(handle);row.appendChild(chk);row.appendChild(info);
+
+  // クリックで編集（ハンドル・チェック以外）
+  row.addEventListener('click',function(e){
+    if(e.target===handle||e.target===chk||chk.contains(e.target))return;
+    closeListModal();openEdit(task.id);
+  });
+
+  // ドラッグ開始
+  row.addEventListener('dragstart',function(e){
+    LIST_DRAG=task.id;row.classList.add('list-dragging');
+    e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain',task.id);
+  });
+  // ドラッグ終了
+  row.addEventListener('dragend',function(){
+    row.classList.remove('list-dragging','over-top','over-bottom');LIST_DRAG=null;
+    document.querySelectorAll('.list-row').forEach(function(r){r.classList.remove('over-top','over-bottom');});
+  });
+  // ドラッグオーバー（挿入位置表示）
+  row.addEventListener('dragover',function(e){
+    e.preventDefault();if(!LIST_DRAG||LIST_DRAG===task.id)return;
+    var rect=row.getBoundingClientRect();
+    row.classList.remove('over-top','over-bottom');
+    row.classList.add(e.clientY<rect.top+rect.height/2?'over-top':'over-bottom');
+  });
+  row.addEventListener('dragleave',function(){row.classList.remove('over-top','over-bottom');});
+  // ドロップ → 並び替え実行
+  row.addEventListener('drop',function(e){
+    e.preventDefault();e.stopPropagation();
+    row.classList.remove('over-top','over-bottom');
+    if(!LIST_DRAG||LIST_DRAG===task.id)return;
+    var rect=row.getBoundingClientRect();
+    var pos=e.clientY<rect.top+rect.height/2?'before':'after';
+    STATE.reorder(LIST_DRAG,task.id,pos);
+    LIST_DRAG=null;
+    renderMatrix();
+    renderListModal(q);
+  });
+
   return row;
 }
 function closeListModal(){
-  document.getElementById('list-overlay').classList.remove('open');LIST_Q=null;
+  document.getElementById('list-overlay').classList.remove('open');LIST_Q=null;LIST_DRAG=null;
 }
 
 /* =====================================================
