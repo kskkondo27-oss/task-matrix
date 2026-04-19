@@ -955,61 +955,53 @@ function renderTabs(){
   bar.innerHTML='';
 
   /* ---- ワークスペースタブ（左端固定） ---- */
-  // 「個人」タブ
+  // 「個人」タブ — クリックはイベント委譲で処理
   var pTab=document.createElement('div');
   pTab.className='ws-tab'+(CURRENT_WORKSPACE.type==='personal'?' ws-active':'');
   pTab.title='個人ワークスペース';
+  pTab.setAttribute('data-ws','personal');
   pTab.innerHTML='<span class="ws-tab-icon">👤</span><span>個人</span>';
-  pTab.addEventListener('click',function(){
-    if(CURRENT_WORKSPACE.type==='personal')return;
-    switchWorkspace('personal',null);
-  });
   bar.appendChild(pTab);
 
-  // グループタブ（各グループ）
+  // グループタブ（各グループ）— クリックはイベント委譲で処理
   USER_GROUPS.forEach(function(grp){
     var isActive=CURRENT_WORKSPACE.type==='group'&&CURRENT_WORKSPACE.groupId===grp.id;
     var gTab=document.createElement('div');
     gTab.className='ws-tab'+(isActive?' ws-active':'');
     gTab.title=grp.name;
+    gTab.setAttribute('data-ws','group');
+    gTab.setAttribute('data-group-id',grp.id);
 
     var icon=document.createElement('span');icon.className='ws-tab-icon';icon.textContent='👥';
     var nameEl=document.createElement('span');nameEl.className='tab-name-span';nameEl.textContent=grp.name;
     gTab.appendChild(icon);gTab.appendChild(nameEl);
 
-    // ⚙️ 設定ボタン（全メンバー表示）
+    // ⚙️ 設定ボタン — data属性のみ、クリックはイベント委譲で処理
     var settBtn=document.createElement('span');
     settBtn.className='ws-invite-btn';settBtn.title='グループ設定';settBtn.textContent='⚙️';
-    settBtn.addEventListener('click',function(e){
-      e.stopPropagation();
-      openGroupSettings(grp.id);
-    });
+    settBtn.setAttribute('data-settings-group',grp.id);
     gTab.appendChild(settBtn);
 
-    gTab.addEventListener('click',function(e){
-      if(e.target===invBtn||invBtn.contains(e.target))return;
-      if(!isActive)switchWorkspace('group',grp.id);
-    });
     bar.appendChild(gTab);
   });
 
-  // 「＋グループ」ボタン
+  // 「＋グループ」ボタン — クリックはイベント委譲で処理
   var addGrp=document.createElement('div');
   addGrp.className='ws-tab ws-tab-add';
   addGrp.title='新しいグループを作成';
+  addGrp.setAttribute('data-ws','new');
   addGrp.innerHTML='<span style="font-size:14px;font-weight:400">＋</span><span>グループ</span>';
-  addGrp.addEventListener('click',function(){openGroupModal();});
   bar.appendChild(addGrp);
 
   // セパレーター
   var sep=document.createElement('div');sep.className='ws-sep';
   bar.appendChild(sep);
 
-  /* ---- ページタブ（既存タブ） ---- */
+  /* ---- ページタブ（既存タブ）— クリックはイベント委譲で処理 ---- */
   STATE.tabs.forEach(function(tab){
     var div=document.createElement('div');
     div.className='tab-item'+(tab.id===STATE.activeTabId?' active':'');
-    div.setAttribute('data-tab-id',tab.id);
+    div.setAttribute('data-page-tab',tab.id);
 
     var dot=document.createElement('span');dot.className='tab-dot';div.appendChild(dot);
 
@@ -1021,17 +1013,62 @@ function renderTabs(){
     editIcon.className='tab-edit-icon';editIcon.title='ダブルクリックで名前変更';editIcon.textContent='✎';
     div.appendChild(editIcon);
 
-    div.addEventListener('click',function(e){
-      if(e.target.classList.contains('tab-edit-icon')){
-        startRename(tab.id,div,nameSpan);return;
-      }
-      STATE.switchTab(tab.id);
-    });
+    // dblclick（名前変更）のみ直接バインド。クリックはイベント委譲で処理
     nameSpan.addEventListener('dblclick',function(e){
       e.stopPropagation();
       startRename(tab.id,div,nameSpan);
     });
     bar.appendChild(div);
+  });
+}
+
+/* =====================================================
+   タブバー イベント委譲（initAppで一度だけ登録）
+   すべてのタブクリックをここで一元処理する。
+   renderTabs()が何度呼ばれても重複登録しない。
+===================================================== */
+function setupTabBarEvents(){
+  var bar=document.getElementById('tab-bar');
+  bar.addEventListener('click',function(e){
+    // ① 設定ボタン（data-settings-group）を最優先チェック
+    var settEl=e.target.closest('[data-settings-group]');
+    if(settEl){
+      console.log('[TAB] settings:',settEl.getAttribute('data-settings-group'));
+      openGroupSettings(settEl.getAttribute('data-settings-group'));
+      return;
+    }
+
+    // ② ページタブ（data-page-tab）
+    var pgEl=e.target.closest('[data-page-tab]');
+    if(pgEl){
+      if(e.target.closest('.tab-edit-icon')){
+        var pid=pgEl.getAttribute('data-page-tab');
+        var nameSpan=pgEl.querySelector('.tab-name-span');
+        console.log('[TAB] rename:',pid);
+        startRename(pid,pgEl,nameSpan);
+        return;
+      }
+      var tid=pgEl.getAttribute('data-page-tab');
+      console.log('[TAB] page:',tid,'active:',STATE.activeTabId);
+      STATE.switchTab(tid);
+      return;
+    }
+
+    // ③ ワークスペースタブ（data-ws）
+    var wsEl=e.target.closest('[data-ws]');
+    if(wsEl){
+      var wsType=wsEl.getAttribute('data-ws');
+      var gid=wsEl.getAttribute('data-group-id');
+      console.log('[TAB] ws:',wsType,gid||'—','current:',CURRENT_WORKSPACE.type,CURRENT_WORKSPACE.groupId||'—');
+      if(wsType==='personal'){
+        if(CURRENT_WORKSPACE.type!=='personal') switchWorkspace('personal',null);
+      } else if(wsType==='group'&&gid){
+        if(!(CURRENT_WORKSPACE.type==='group'&&CURRENT_WORKSPACE.groupId===gid)) switchWorkspace('group',gid);
+      } else if(wsType==='new'){
+        openGroupModal();
+      }
+      return;
+    }
   });
 }
 
@@ -1950,6 +1987,7 @@ function initApp(){
 
   STATE.load();
   fbWatch('data',_onDataSync);
+  setupTabBarEvents(); // タブバーのイベント委譲を一度だけ登録
   renderTabs();renderMatrix();setupDropZones();initLabels();initAxis();
 
   // ユーザー情報をヘッダーに表示
