@@ -335,6 +335,25 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
 .inv-actions{display:flex;gap:8px;margin-top:4px}
 .inv-note{font-size:11px;color:var(--text-muted);margin-top:8px;line-height:1.5}
 
+/* =====================================================
+   グループ設定モーダル（Phase 3）
+===================================================== */
+.member-list{display:flex;flex-direction:column;gap:6px;max-height:220px;overflow-y:auto;padding:2px 0}
+.member-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--card-border);border-radius:10px;transition:background .15s}
+.member-item:hover{background:#f9fafb}
+.member-avatar{width:34px;height:34px;border-radius:50%;background:#e5e7eb;flex-shrink:0;display:grid;place-items:center;font-size:14px;overflow:hidden;border:1.5px solid var(--card-border)}
+.member-info{flex:1;min-width:0}
+.member-name{font-size:13px;font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.role-badge{display:inline-block;font-size:10px;font-weight:700;padding:2px 7px;border-radius:999px;margin-top:3px;letter-spacing:.03em;vertical-align:middle}
+.role-admin{background:#fef3c7;color:#92400e;border:1px solid #fde68a}
+.role-member{background:#f3f4f6;color:#6b7280;border:1px solid #e5e7eb}
+.danger-zone{margin-top:16px;padding-top:16px;border-top:1.5px dashed #fca5a5}
+.gsettings-section{margin-bottom:18px}
+.gsettings-section:last-child{margin-bottom:0}
+.invite-link-row{display:flex;gap:8px;align-items:stretch}
+.invite-link-row .inv-box{flex:1;margin:0;font-size:11px;padding:10px 12px}
+.invite-link-row .btn{flex-shrink:0;font-size:12px;padding:0 12px}
+
 /* Responsive */
 @media(max-width:860px){
   :root{--gap:28px}
@@ -582,6 +601,17 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
       <button class="btn" id="inv-new-btn">🔄 再生成</button>
     </div>
     <p class="inv-note">リンクを知っているGoogleアカウントのユーザーが参加できます。</p>
+  </div>
+</div>
+
+<!-- ===== グループ設定モーダル（Phase 3） ===== -->
+<div class="grp-ov" id="gsettings-ov">
+  <div class="grp-modal" style="max-width:520px">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
+      <div class="grp-ttl" style="margin-bottom:0" id="gsettings-title">グループ設定</div>
+      <button class="modal-x" id="gsettings-close-btn">✕</button>
+    </div>
+    <div id="gsettings-content"><!-- 動的に描画 --></div>
   </div>
 </div>
 
@@ -937,14 +967,14 @@ function renderTabs(){
     var nameEl=document.createElement('span');nameEl.className='tab-name-span';nameEl.textContent=grp.name;
     gTab.appendChild(icon);gTab.appendChild(nameEl);
 
-    // 招待ボタン（全メンバー表示）
-    var invBtn=document.createElement('span');
-    invBtn.className='ws-invite-btn';invBtn.title='招待リンクを表示';invBtn.textContent='🔗';
-    invBtn.addEventListener('click',function(e){
+    // ⚙️ 設定ボタン（全メンバー表示）
+    var settBtn=document.createElement('span');
+    settBtn.className='ws-invite-btn';settBtn.title='グループ設定';settBtn.textContent='⚙️';
+    settBtn.addEventListener('click',function(e){
       e.stopPropagation();
-      openInviteModal(grp.id);
+      openGroupSettings(grp.id);
     });
-    gTab.appendChild(invBtn);
+    gTab.appendChild(settBtn);
 
     gTab.addEventListener('click',function(e){
       if(e.target===invBtn||invBtn.contains(e.target))return;
@@ -1470,7 +1500,8 @@ function createGroup(){
   var gid='grp-'+uid();
   var now=new Date().toISOString();
   var groupInfo={name:name,createdBy:CURRENT_UID,createdAt:now};
-  var memberData={role:'admin',joinedAt:now,displayName:(_fbAuth.currentUser&&_fbAuth.currentUser.displayName)||''};
+  var _cu=_fbAuth.currentUser;
+  var memberData={role:'admin',joinedAt:now,displayName:(_cu&&_cu.displayName)||'',photoURL:(_cu&&_cu.photoURL)||''};
   var membership={role:'admin',groupName:name,joinedAt:now};
   _refreshToken().then(function(){
     Promise.all([
@@ -1571,7 +1602,8 @@ function processInvite(token){
 function joinGroup(groupId,groupName){
   document.getElementById('join-ov').classList.remove('open');
   var now=new Date().toISOString();
-  var memberData={role:'member',joinedAt:now,displayName:(_fbAuth.currentUser&&_fbAuth.currentUser.displayName)||''};
+  var _cu=_fbAuth.currentUser;
+  var memberData={role:'member',joinedAt:now,displayName:(_cu&&_cu.displayName)||'',photoURL:(_cu&&_cu.photoURL)||''};
   var membership={role:'member',groupName:groupName,joinedAt:now};
   _refreshToken().then(function(){
     Promise.all([
@@ -1583,6 +1615,240 @@ function joinGroup(groupId,groupName){
       showToast('「'+groupName+'」に参加しました ✓');
       switchWorkspace('group',groupId);
     }).catch(function(){showToast('参加に失敗しました。もう一度お試しください。');});
+  });
+}
+
+/* =====================================================
+   Phase 3: グループ設定・権限管理
+===================================================== */
+
+/* グループ設定モーダルを開く */
+function openGroupSettings(groupId){
+  var grp=USER_GROUPS.find(function(g){return g.id===groupId;});
+  if(!grp)return;
+  document.getElementById('gsettings-title').textContent=grp.name+' の設定';
+  document.getElementById('gsettings-content').innerHTML='<div style="text-align:center;padding:24px;color:var(--text-muted)">読み込み中...</div>';
+  document.getElementById('gsettings-ov').classList.add('open');
+  // メンバー一覧をFirebaseから取得
+  loadGroupMembers(groupId,function(members){
+    renderGroupSettings(groupId,members);
+  });
+}
+function closeGroupSettings(){
+  document.getElementById('gsettings-ov').classList.remove('open');
+}
+
+/* Firebase からメンバー一覧を取得 */
+function loadGroupMembers(groupId,cb){
+  _refreshToken().then(function(){
+    fetch(FB+'/groups/'+groupId+'/members.json?auth='+_authToken)
+    .then(function(r){return r.ok?r.json():null;})
+    .then(function(d){
+      var members=[];
+      if(d&&typeof d==='object'){
+        members=Object.keys(d).map(function(uid){return Object.assign({uid:uid},d[uid]);});
+        // オーナーを先頭に
+        members.sort(function(a,b){
+          if(a.role==='admin'&&b.role!=='admin')return -1;
+          if(b.role==='admin'&&a.role!=='admin')return 1;
+          return(a.joinedAt||'')>(b.joinedAt||'')?1:-1;
+        });
+      }
+      cb(members);
+    }).catch(function(){cb([]);});
+  });
+}
+
+/* グループ設定モーダルの内容を描画 */
+function renderGroupSettings(groupId,members){
+  var grp=USER_GROUPS.find(function(g){return g.id===groupId;});
+  if(!grp)return;
+  var isAdmin=(grp.role==='admin');
+  var content=document.getElementById('gsettings-content');
+  content.innerHTML='';
+
+  /* ---- グループ名 ---- */
+  var nameSection=document.createElement('div');nameSection.className='gsettings-section';
+  var nameLbl=document.createElement('label');nameLbl.className='fl';nameLbl.textContent='グループ名';
+  var nameRow=document.createElement('div');nameRow.style.cssText='display:flex;gap:8px;align-items:center';
+  var nameInput=document.createElement('input');
+  nameInput.type='text';nameInput.className='fi';nameInput.id='gsettings-name-input';
+  nameInput.value=grp.name;nameInput.disabled=!isAdmin;
+  if(!isAdmin)nameInput.style.background='#f9fafb';
+  nameRow.appendChild(nameInput);
+  if(isAdmin){
+    var saveNameBtn=document.createElement('button');
+    saveNameBtn.className='btn btn-primary';saveNameBtn.textContent='保存';
+    saveNameBtn.style.flexShrink='0';
+    saveNameBtn.addEventListener('click',function(){
+      var v=(nameInput.value||'').trim();
+      if(v)renameGroup(groupId,v);
+    });
+    nameInput.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();saveNameBtn.click();}});
+    nameRow.appendChild(saveNameBtn);
+  }
+  nameSection.appendChild(nameLbl);nameSection.appendChild(nameRow);
+  content.appendChild(nameSection);
+
+  /* ---- 招待リンク（admin のみ） ---- */
+  if(isAdmin){
+    var invSection=document.createElement('div');invSection.className='gsettings-section';
+    var invLbl=document.createElement('label');invLbl.className='fl';invLbl.textContent='招待リンク';
+    var invNote=document.createElement('p');invNote.style.cssText='font-size:12px;color:var(--text-sub);margin-bottom:8px';
+    invNote.textContent='リンクを共有してメンバーを招待できます（24時間有効）';
+    var invBtn=document.createElement('button');invBtn.className='btn';
+    invBtn.innerHTML='🔗 招待リンクを生成・表示';invBtn.style.width='100%';
+    invBtn.addEventListener('click',function(){closeGroupSettings();openInviteModal(groupId);});
+    invSection.appendChild(invLbl);invSection.appendChild(invNote);invSection.appendChild(invBtn);
+    content.appendChild(invSection);
+  }
+
+  /* ---- メンバー一覧 ---- */
+  var memberSection=document.createElement('div');memberSection.className='gsettings-section';
+  var memberLbl=document.createElement('label');memberLbl.className='fl';
+  memberLbl.textContent='メンバー（'+members.length+'人）';
+  var memberList=document.createElement('div');memberList.className='member-list';
+
+  if(!members.length){
+    memberList.innerHTML='<div style="text-align:center;padding:16px;color:var(--text-muted);font-size:13px">メンバー情報を取得できませんでした</div>';
+  }
+  members.forEach(function(m){
+    var item=document.createElement('div');item.className='member-item';
+
+    // アバター
+    var avatar=document.createElement('div');avatar.className='member-avatar';
+    if(m.photoURL){
+      var img=document.createElement('img');img.src=m.photoURL;
+      img.style.cssText='width:100%;height:100%;border-radius:50%;object-fit:cover';
+      img.onerror=function(){avatar.textContent='👤';};
+      avatar.appendChild(img);
+    } else {avatar.textContent='👤';}
+
+    // 名前・バッジ
+    var info=document.createElement('div');info.className='member-info';
+    var nameEl=document.createElement('div');nameEl.className='member-name';
+    nameEl.textContent=(m.displayName||'（名前なし）')+(m.uid===CURRENT_UID?' （あなた）':'');
+    var badge=document.createElement('span');
+    badge.className='role-badge '+(m.role==='admin'?'role-admin':'role-member');
+    badge.textContent=m.role==='admin'?'👑 オーナー':'メンバー';
+    info.appendChild(nameEl);info.appendChild(badge);
+
+    item.appendChild(avatar);item.appendChild(info);
+
+    // 削除ボタン（admin のみ、自分以外）
+    if(isAdmin&&m.uid!==CURRENT_UID){
+      var rmBtn=document.createElement('button');rmBtn.className='btn btn-del';
+      rmBtn.textContent='削除';rmBtn.style.cssText='margin-right:0;font-size:12px;padding:5px 11px;flex-shrink:0';
+      rmBtn.addEventListener('click',(function(targetUid,targetName){
+        return function(){
+          if(confirm('「'+(targetName||'このメンバー')+'」をグループから削除しますか？')){
+            removeMember(groupId,targetUid,members);
+          }
+        };
+      })(m.uid,m.displayName));
+      item.appendChild(rmBtn);
+    }
+    memberList.appendChild(item);
+  });
+  memberSection.appendChild(memberLbl);memberSection.appendChild(memberList);
+  content.appendChild(memberSection);
+
+  /* ---- 危険ゾーン ---- */
+  var dangerSection=document.createElement('div');dangerSection.className='danger-zone';
+  if(isAdmin){
+    // admin → グループ削除
+    var delGrpBtn=document.createElement('button');delGrpBtn.className='btn btn-del';
+    delGrpBtn.style.cssText='width:100%;justify-content:center;margin-right:0';
+    delGrpBtn.textContent='🗑 グループを削除する';
+    delGrpBtn.addEventListener('click',function(){
+      if(confirm('「'+grp.name+'」を完全に削除しますか？\nすべてのデータが失われます。この操作は元に戻せません。')){
+        deleteGroup(groupId);
+      }
+    });
+    dangerSection.appendChild(delGrpBtn);
+  } else {
+    // member → グループを退出
+    var leaveBtn=document.createElement('button');leaveBtn.className='btn btn-del';
+    leaveBtn.style.cssText='width:100%;justify-content:center;margin-right:0';
+    leaveBtn.textContent='このグループを退出する';
+    leaveBtn.addEventListener('click',function(){
+      if(confirm('「'+grp.name+'」から退出しますか？')){leaveGroup(groupId);}
+    });
+    dangerSection.appendChild(leaveBtn);
+  }
+  content.appendChild(dangerSection);
+}
+
+/* グループ名変更（admin のみ） */
+function renameGroup(groupId,newName){
+  if(!newName)return;
+  var grp=USER_GROUPS.find(function(g){return g.id===groupId;});
+  if(!grp||grp.role!=='admin'){showToast('権限がありません');return;}
+  _refreshToken().then(function(){
+    Promise.all([
+      fetch(FB+'/groups/'+groupId+'/info/name.json?auth='+_authToken,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(newName)}),
+      fetch(FB+'/users/'+CURRENT_UID+'/groupMemberships/'+groupId+'/groupName.json?auth='+_authToken,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(newName)})
+    ]).then(function(){
+      grp.name=newName;
+      document.getElementById('gsettings-title').textContent=newName+' の設定';
+      var wb=document.getElementById('ws-badge');
+      if(wb&&CURRENT_WORKSPACE.groupId===groupId)wb.textContent=newName;
+      renderTabs();
+      showToast('グループ名を変更しました ✓');
+    }).catch(function(){showToast('変更に失敗しました');});
+  });
+}
+
+/* メンバー削除（admin のみ） */
+function removeMember(groupId,targetUid,members){
+  var grp=USER_GROUPS.find(function(g){return g.id===groupId;});
+  if(!grp||grp.role!=='admin'){showToast('権限がありません');return;}
+  _refreshToken().then(function(){
+    fetch(FB+'/groups/'+groupId+'/members/'+targetUid+'.json?auth='+_authToken,{method:'DELETE'})
+    .then(function(){
+      showToast('メンバーを削除しました ✓');
+      // UIを再描画（削除後のメンバーリスト）
+      var newMembers=members.filter(function(m){return m.uid!==targetUid;});
+      renderGroupSettings(groupId,newMembers);
+    }).catch(function(){showToast('削除に失敗しました');});
+  });
+}
+
+/* グループを退出（一般メンバー） */
+function leaveGroup(groupId){
+  closeGroupSettings();
+  _refreshToken().then(function(){
+    Promise.all([
+      fetch(FB+'/groups/'+groupId+'/members/'+CURRENT_UID+'.json?auth='+_authToken,{method:'DELETE'}),
+      fetch(FB+'/users/'+CURRENT_UID+'/groupMemberships/'+groupId+'.json?auth='+_authToken,{method:'DELETE'})
+    ]).then(function(){
+      USER_GROUPS=USER_GROUPS.filter(function(g){return g.id!==groupId;});
+      showToast('グループから退出しました');
+      // 個人ワークスペースに戻る
+      if(CURRENT_WORKSPACE.groupId===groupId)switchWorkspace('personal',null);
+      else renderTabs();
+    }).catch(function(){showToast('退出に失敗しました');});
+  });
+}
+
+/* グループ削除（admin のみ） */
+function deleteGroup(groupId){
+  var grp=USER_GROUPS.find(function(g){return g.id===groupId;});
+  if(!grp||grp.role!=='admin'){showToast('権限がありません');return;}
+  closeGroupSettings();
+  _refreshToken().then(function(){
+    Promise.all([
+      fetch(FB+'/groups/'+groupId+'.json?auth='+_authToken,{method:'DELETE'}),
+      fetch(FB+'/users/'+CURRENT_UID+'/groupMemberships/'+groupId+'.json?auth='+_authToken,{method:'DELETE'})
+    ]).then(function(){
+      USER_GROUPS=USER_GROUPS.filter(function(g){return g.id!==groupId;});
+      // localStorage もクリア
+      try{localStorage.removeItem('tm-data-v3-grp-'+groupId);}catch(e){}
+      try{localStorage.removeItem('tm-labels-v1-grp-'+groupId);}catch(e){}
+      showToast('グループを削除しました');
+      if(CURRENT_WORKSPACE.groupId===groupId)switchWorkspace('personal',null);
+      else renderTabs();
+    }).catch(function(){showToast('削除に失敗しました');});
   });
 }
 
@@ -1635,7 +1901,7 @@ function initApp(){
   document.getElementById('del-btn').addEventListener('click',function(){
     if(EDITING_ID&&confirm('このタスクを削除しますか？')){STATE.removeTask(EDITING_ID);renderMatrix();closeModal();showToast('削除しました');}
   });
-  document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeModal();closeListModal();closeGroupModal();closeInviteModal();}});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeModal();closeListModal();closeGroupModal();closeInviteModal();closeGroupSettings();}});
   document.getElementById('list-modal-x').addEventListener('click',closeListModal);
   document.getElementById('list-overlay').addEventListener('click',function(e){if(e.target===document.getElementById('list-overlay'))closeListModal();});
 
@@ -1651,6 +1917,10 @@ function initApp(){
   document.getElementById('inv-new-btn').addEventListener('click',function(){if(_currentInviteGroupId)generateInviteLink(_currentInviteGroupId);});
   document.getElementById('inv-ov').addEventListener('click',function(e){if(e.target===document.getElementById('inv-ov'))closeInviteModal();});
   document.getElementById('inv-link-box').addEventListener('click',copyInviteLink);
+
+  // グループ設定モーダル（Phase 3）
+  document.getElementById('gsettings-close-btn').addEventListener('click',closeGroupSettings);
+  document.getElementById('gsettings-ov').addEventListener('click',function(e){if(e.target===document.getElementById('gsettings-ov'))closeGroupSettings();});
 }
 
 /* 旧データ（/unashi/）を新パスに一回だけ移行 */
