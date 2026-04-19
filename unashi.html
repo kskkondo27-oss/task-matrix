@@ -670,6 +670,7 @@ var CURRENT_WORKSPACE={type:'personal',groupId:null};
 var USER_GROUPS=[];   // [{id,name,role,joinedAt}]
 var _pendingInviteToken=null;
 var _currentInviteGroupId=null;
+var _wsToken=0; // ワークスペース切替のたびにインクリメント（非同期コールバックの無効化用）
 var DEFAULT_LABELS={
   's-title':'最重要（今すぐやる）','s-desc':'すぐに結果(利益、向上)に結びつくタスク','s-sub':'緊急 × 重要',
   'a-title':'重要だが期限に迫られていないもの','a-desc':'戦略的、戦術的で熟成が必要','a-sub':'非緊急 × 重要',
@@ -677,35 +678,44 @@ var DEFAULT_LABELS={
   'c-title':'いったん置いておく','c-desc':'保留・後回し・削除候補','c-sub':'非緊急 × 非重要'
 };
 
-function _fp(k){
-  var base;
+/* ベースURL（ワークスペース情報）を同期的に確定 ← 非同期コールバック前に必ず呼ぶ */
+function _fpBase(k){
   if(CURRENT_WORKSPACE.type==='group'&&CURRENT_WORKSPACE.groupId){
-    base=FB+'/groups/'+CURRENT_WORKSPACE.groupId+'/'+k+'.json';
-  } else {
-    base=FB+'/users/'+CURRENT_UID+'/'+k+'.json';
+    return FB+'/groups/'+CURRENT_WORKSPACE.groupId+'/'+k+'.json';
   }
+  return FB+'/users/'+CURRENT_UID+'/'+k+'.json';
+}
+function _fp(k){
+  var base=_fpBase(k);
   return _authToken?base+'?auth='+_authToken:base;
 }
 function _refreshToken(){
   if(!_fbAuth.currentUser)return Promise.resolve(null);
   return _fbAuth.currentUser.getIdToken(false).then(function(t){_authToken=t;return t;}).catch(function(){return null;});
 }
+/* fbSave/fbLoad/fbWatch はベースURLを同期的に確定してから非同期処理へ */
 function fbSave(k,v){
-  _refreshToken().then(function(){
-    fetch(_fp(k),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)}).catch(function(){});
+  var base=_fpBase(k); // ← CURRENT_WORKSPACE が変わる前に確定
+  _refreshToken().then(function(t){
+    var url=t?base+'?auth='+t:base;
+    fetch(url,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)}).catch(function(){});
   });
 }
 function fbLoad(k){
-  return _refreshToken().then(function(){
-    return fetch(_fp(k)).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+  var base=_fpBase(k); // ← CURRENT_WORKSPACE が変わる前に確定
+  return _refreshToken().then(function(t){
+    var url=t?base+'?auth='+t:base;
+    return fetch(url).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
   });
 }
 function fbWatch(k,cb){
   if(typeof EventSource==='undefined')return;
   function connect(){
+    var base=_fpBase(k); // ← CURRENT_WORKSPACE が変わる前に確定
     if(_esMap[k]){_esMap[k].close();}
-    _refreshToken().then(function(){
-      var es=new EventSource(_fp(k));
+    _refreshToken().then(function(t){
+      var url=t?base+'?auth='+t:base;
+      var es=new EventSource(url);
       _esMap[k]=es;
       es.addEventListener('put',function(e){try{var m=JSON.parse(e.data);if(m&&m.data!=null)cb(m.data);}catch(ex){}});
       es.onerror=function(){setTimeout(connect,6000);};
@@ -796,20 +806,20 @@ var STATE={
       this.activeTabId=this.tabs[0].id;
     }
     // Firebaseから最新データを取得（タスク数が多い方を優先）
-    var self=this,localN=this.tasks.length,snap={version:3,tabs:this.tabs,tasks:this.tasks,activeTabId:this.activeTabId};
+    var self=this,localN=this.tasks.length,loadToken=_wsToken;
+    var snap={version:3,tabs:this.tabs,tasks:this.tasks,activeTabId:this.activeTabId};
     fbLoad('data').then(function(d){
+      // ワークスペースが切り替わっていたらこのコールバックは無効
+      if(loadToken!==_wsToken)return;
       var fbN=(d&&d.tasks)?d.tasks.length:0;
       if(d&&d.tabs&&fbN>localN){
-        // Firebaseにより多くのタスク → 採用
         _fl=true;self.tabs=d.tabs;self.tasks=self._normalize(d.tasks);
-        // activeTabId は現在のタブが有効なら維持
         if(!self.tabs.find(function(t){return t.id===self.activeTabId;})){
           self.activeTabId=d.activeTabId||self.tabs[0].id;
         }
         try{localStorage.setItem(self.DKEY,JSON.stringify(d));}catch(e){}
         _fl=false;renderTabs();renderMatrix();showToast('クラウドから同期しました ✓');
       } else {
-        // ローカルが同数以上 → ローカルをFirebaseへアップロード
         fbSave('data',snap);
       }
     });
@@ -1471,14 +1481,20 @@ function loadUserGroups(cb){
   });
 }
 
-/* ワークスペース切り替え */
+/* ワークスペース切り替え
+   設計：同期ロード（localStorage）→ 即時描画 → 非同期Firebase更新
+   _wsToken でスタレコールバックを完全遮断 */
 function switchWorkspace(type,groupId){
-  // 既存SSE接続を全て閉じる
+  var token=++_wsToken; // このswitchのトークン
+  console.log('[WS] switch →',type,groupId||'personal','token=',token);
+
+  // 1. 既存SSE接続を全て閉じる
   Object.keys(_esMap).forEach(function(k){try{_esMap[k].close();}catch(e){}delete _esMap[k];});
 
+  // 2. ワークスペースを更新
   CURRENT_WORKSPACE={type:type,groupId:groupId||null};
 
-  // ヘッダーバッジ更新
+  // 3. ヘッダーバッジ更新
   var wb=document.getElementById('ws-badge');
   if(wb){
     if(type==='group'){
@@ -1487,19 +1503,74 @@ function switchWorkspace(type,groupId){
     } else {wb.style.display='none';}
   }
 
-  // ラベルをデフォルトにリセット（新ワークスペース用）
+  // 4. ラベルをデフォルトにリセット
   applyLabels(DEFAULT_LABELS);
 
-  // STATE を新ワークスペースのデータでロード
+  // 5. STATEをクリアしてlocalStorageから同期ロード（URLはすでにCURRENT_WORKSPACE更新済み）
   STATE.tabs=[];STATE.tasks=[];STATE.activeTabId=null;
-  STATE.load();
+  try{
+    var stored=localStorage.getItem(STATE.DKEY);
+    if(stored){
+      var ld=JSON.parse(stored);
+      STATE.tabs=ld.tabs||[];
+      STATE.tasks=STATE._normalize(ld.tasks);
+      STATE.activeTabId=ld.activeTabId||null;
+      console.log('[WS] localStorage OK: tabs=',STATE.tabs.length,'tasks=',STATE.tasks.length);
+    } else {
+      console.log('[WS] no localStorage data (DKEY='+STATE.DKEY+')');
+    }
+  }catch(e){console.warn('[WS] localStorage parse error',e);}
 
-  // Firebase Watch 再セットアップ
-  fbWatch('data',_onDataSync);
+  // 有効なタブが必ず1つ以上存在することを保証
+  if(!STATE.tabs.length){
+    var newTab=STATE._makeTab('全体');
+    STATE.tabs.push(newTab);STATE.activeTabId=newTab.id;
+    console.log('[WS] created default tab id=',newTab.id);
+  }
+  if(!STATE.tabs.find(function(t){return t.id===STATE.activeTabId;})){
+    STATE.activeTabId=STATE.tabs[0].id;
+  }
+
+  // 6. localStorageデータで即時描画
+  renderTabs();renderMatrix();
+
+  // 7. Firebaseから非同期ロード（token チェックで競合を防ぐ）
+  var snapN=STATE.tasks.length;
+  fbLoad('data').then(function(d){
+    if(token!==_wsToken){console.log('[WS] stale callback, skip token=',token);return;}
+    console.log('[WS] firebase:',d?'OK tasks='+(d.tasks||[]).length:'null');
+    if(d&&d.tabs&&d.tabs.length){
+      if((d.tasks||[]).length>=snapN){
+        STATE.tabs=d.tabs;STATE.tasks=STATE._normalize(d.tasks);
+        if(!STATE.tabs.find(function(t){return t.id===STATE.activeTabId;})){
+          STATE.activeTabId=d.activeTabId||STATE.tabs[0].id;
+        }
+        try{localStorage.setItem(STATE.DKEY,JSON.stringify(d));}catch(e){}
+        renderTabs();renderMatrix();
+      }
+    } else {
+      // Firebaseにデータなし → 現在のstateを初期保存
+      var saveSnap={version:3,tabs:STATE.tabs,tasks:STATE.tasks,activeTabId:STATE.activeTabId};
+      fbSave('data',saveSnap);
+      try{localStorage.setItem(STATE.DKEY,JSON.stringify(saveSnap));}catch(e){}
+    }
+  });
+
+  // 8. 新ワークスペース用のSSE Watch（トークンスコープ）
+  (function(wsToken){
+    fbWatch('data',function(d){
+      if(wsToken!==_wsToken)return;
+      _onDataSync(d);
+    });
+  })(token);
+
+  // 9. ラベルを新ワークスペース用にロード
   initLabels();
 
-  renderTabs();renderMatrix();
-  showToast(type==='group'?'グループ: '+(USER_GROUPS.find(function(g){return g.id===groupId;})||{name:'グループ'}).name:'個人ワークスペース に切り替えました');
+  var wsName=type==='group'?
+    (USER_GROUPS.find(function(g){return g.id===groupId;})||{name:'グループ'}).name:
+    '個人';
+  showToast(wsName+' に切り替えました');
 }
 
 /* グループ作成モーダル */
