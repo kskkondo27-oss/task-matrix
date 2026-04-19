@@ -4,6 +4,9 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>タスク管理マトリクス</title>
+<!-- Firebase Auth SDK (compat v10) -->
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
 <style>
 /* =====================================================
    定数
@@ -271,6 +274,24 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
 .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(8px);background:#1f2328;color:#fff;font-size:13px;padding:9px 20px;border-radius:10px;opacity:0;pointer-events:none;transition:opacity .22s,transform .22s;z-index:999;white-space:nowrap}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
+/* =====================================================
+   ログイン画面
+===================================================== */
+.auth-screen{position:fixed;inset:0;background:#f4f5f7;z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px}
+.auth-card{background:#fff;border-radius:20px;padding:44px 36px;max-width:380px;width:100%;text-align:center;box-shadow:0 4px 32px rgba(0,0,0,.1)}
+.auth-icon{font-size:44px;margin-bottom:16px}
+.auth-title{font-size:22px;font-weight:800;margin-bottom:8px;color:var(--text)}
+.auth-sub{font-size:14px;color:var(--text-sub);margin-bottom:28px;line-height:1.7}
+.google-btn{display:inline-flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:13px 20px;border:1.5px solid var(--card-border);border-radius:10px;background:#fff;font-size:14px;font-weight:600;cursor:pointer;color:var(--text);transition:all .15s;font-family:inherit}
+.google-btn:hover{background:#f9fafb;border-color:#94a3b8;box-shadow:0 2px 10px rgba(0,0,0,.08)}
+.auth-err{font-size:12px;color:#dc2626;margin-top:14px;min-height:18px}
+/* ユーザー情報（ヘッダー） */
+.user-info{display:none;align-items:center;gap:8px}
+.user-avatar{width:28px;height:28px;border-radius:50%;object-fit:cover;border:2px solid var(--card-border);flex-shrink:0}
+.user-name-txt{font-size:12px;font-weight:600;color:var(--text-sub);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.logout-btn{font-size:11px;color:var(--text-muted);background:transparent;border:1px solid var(--card-border);border-radius:6px;padding:4px 9px;cursor:pointer;font-family:inherit;transition:all .15s;white-space:nowrap}
+.logout-btn:hover{background:#fee2e2;border-color:#dc2626;color:#dc2626}
+
 /* Responsive */
 @media(max-width:860px){
   :root{--gap:28px}
@@ -291,6 +312,20 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
 </head>
 <body>
 
+<!-- ===== ログイン画面 ===== -->
+<div id="auth-screen" class="auth-screen">
+  <div class="auth-card">
+    <div class="auth-icon">📋</div>
+    <h1 class="auth-title">タスク管理マトリクス</h1>
+    <p class="auth-sub">Googleアカウントでログインして<br>ご利用ください</p>
+    <button id="google-login-btn" class="google-btn">
+      <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path fill="#4285F4" d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.716v2.259h2.908C16.658 13.952 17.64 11.644 17.64 9.2z"/><path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.964 10.706c-.18-.54-.282-1.117-.282-1.706s.102-1.166.282-1.706V4.962H.957A8.997 8.997 0 0 0 0 9c0 1.452.348 2.827.957 4.038l3.007-2.332z"/><path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.962L3.964 6.294C4.672 4.169 6.656 3.58 9 3.58z"/></svg>
+      Googleでログイン
+    </button>
+    <p class="auth-err" id="auth-err"></p>
+  </div>
+</div>
+
 <!-- ===== Header ===== -->
 <header class="header">
   <div class="header-left">
@@ -306,6 +341,11 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
       新規ページ追加
     </button>
     <button class="btn btn-primary" id="header-add-btn">＋&nbsp;追加</button>
+    <div class="user-info" id="user-info">
+      <img class="user-avatar" id="user-avatar" src="" alt=""/>
+      <span class="user-name-txt" id="user-name"></span>
+      <button class="logout-btn" id="logout-btn">ログアウト</button>
+    </div>
   </div>
 </header>
 
@@ -480,20 +520,60 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
 </div>
 
 <script>
-var WORKSPACE='unashi'; /* ウナシ用（固定） */
+/* =====================================================
+   Firebase 設定
+   ⚠ apiKey を Firebase Console から取得して書き換えてください
+     Console → プロジェクト設定 → マイアプリ → ウェブ API キー
+===================================================== */
+var FIREBASE_CONFIG={
+  apiKey:'AIzaSyBtfvKaHbmpub3S9GS97zXgeWLAovoXtLY',
+  authDomain:'task-matrix-99085.firebaseapp.com',
+  databaseURL:'https://task-matrix-99085-default-rtdb.firebaseio.com',
+  projectId:'task-matrix-99085',
+};
+firebase.initializeApp(FIREBASE_CONFIG);
+var _fbAuth=firebase.auth();
+var _gProvider=new firebase.auth.GoogleAuthProvider();
 
 /* =====================================================
-   Firebase クラウド同期
+   Firebase クラウド同期（認証対応）
 ===================================================== */
 var FB='https://task-matrix-99085-default-rtdb.firebaseio.com';
 var _fl=false;
-function _fp(k){return FB+'/'+WORKSPACE+'/'+k+'.json';}
-function fbSave(k,v){fetch(_fp(k),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)}).catch(function(){});}
-function fbLoad(k){return fetch(_fp(k)).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});}
+var CURRENT_UID=null;
+var _authToken=null;
+var _esMap={};
+
+function _fp(k){
+  var base=FB+'/users/'+CURRENT_UID+'/'+k+'.json';
+  return _authToken?base+'?auth='+_authToken:base;
+}
+function _refreshToken(){
+  if(!_fbAuth.currentUser)return Promise.resolve(null);
+  return _fbAuth.currentUser.getIdToken(false).then(function(t){_authToken=t;return t;}).catch(function(){return null;});
+}
+function fbSave(k,v){
+  _refreshToken().then(function(){
+    fetch(_fp(k),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(v)}).catch(function(){});
+  });
+}
+function fbLoad(k){
+  return _refreshToken().then(function(){
+    return fetch(_fp(k)).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+  });
+}
 function fbWatch(k,cb){
   if(typeof EventSource==='undefined')return;
-  var es=new EventSource(_fp(k));
-  es.addEventListener('put',function(e){try{var m=JSON.parse(e.data);if(m&&m.data!=null)cb(m.data);}catch(ex){}});
+  function connect(){
+    if(_esMap[k]){_esMap[k].close();}
+    _refreshToken().then(function(){
+      var es=new EventSource(_fp(k));
+      _esMap[k]=es;
+      es.addEventListener('put',function(e){try{var m=JSON.parse(e.data);if(m&&m.data!=null)cb(m.data);}catch(ex){}});
+      es.onerror=function(){setTimeout(connect,6000);};
+    });
+  }
+  connect();
 }
 
 /* =====================================================
@@ -527,8 +607,8 @@ var STATE={
   tasks:[],      // [{id,tabId,quadrant,title,owner,dueDate,actions,isCompleted,sortOrder,createdAt,updatedAt,completedAt}]
   activeTabId:null,
   /* ストレージキーはワークスペース単位で完全分離 */
-  get DKEY(){return WORKSPACE+'-matrix-data-v3';},
-  get LKEY(){return WORKSPACE+'-matrix-labels-v1';},
+  get DKEY(){return 'tm-data-v3-'+(CURRENT_UID||'anon');},
+  get LKEY(){return 'tm-labels-v1-'+(CURRENT_UID||'anon');},
 
   /* ---- persistence ---- */
   save:function(){
@@ -1122,52 +1202,42 @@ function initAxis(){
 }
 
 /* =====================================================
-   Boot
+   アプリ初期化（ログイン後に呼ばれる）
 ===================================================== */
-document.addEventListener('DOMContentLoaded',function(){
+var _appInited=false;
+function initApp(){
+  if(_appInited)return; _appInited=true;
+
   STATE.load();
-  // リアルタイム同期（他デバイスの変更を受信）
   fbWatch('data',function(d){
     if(_fl||!d||!d.tabs)return;
-    // 自分より少ないタスク数は古いデータ → 無視
-    if((d.tasks||[]).length < STATE.tasks.length)return;
-    _fl=true;
-    STATE.tabs=d.tabs;
-    STATE.tasks=STATE._normalize(d.tasks);
-    // activeTabId は現在のタブが有効なら維持、無効なら更新
+    if((d.tasks||[]).length<STATE.tasks.length)return;
+    _fl=true;STATE.tabs=d.tabs;STATE.tasks=STATE._normalize(d.tasks);
     if(!STATE.tabs.find(function(t){return t.id===STATE.activeTabId;})){
       STATE.activeTabId=d.activeTabId||d.tabs[0].id;
     }
     try{localStorage.setItem(STATE.DKEY,JSON.stringify(d));}catch(e){}
     _fl=false;renderTabs();renderMatrix();
   });
-  renderTabs();
-  renderMatrix();
-  setupDropZones();
-  initLabels();
-  initAxis();
+  renderTabs();renderMatrix();setupDropZones();initLabels();initAxis();
 
-  /* ワークスペースバッジ */
-  var wsBadge=document.getElementById('ws-badge');
-  var wsLabels={'unashi':'ウナシ用','partner':'パートナー用'};
-  if(wsBadge){
-    wsBadge.textContent=wsLabels[WORKSPACE]||WORKSPACE;
-    wsBadge.title='ワークスペース: '+WORKSPACE+'（データは他URLと完全分離）';
+  // ユーザー情報をヘッダーに表示
+  var u=_fbAuth.currentUser;
+  if(u){
+    var av=document.getElementById('user-avatar');
+    if(av&&u.photoURL){av.src=u.photoURL;}
+    var nm=document.getElementById('user-name');
+    if(nm)nm.textContent=u.displayName||u.email||'';
+    document.getElementById('user-info').style.display='flex';
+    var wb=document.getElementById('ws-badge');if(wb)wb.style.display='none';
   }
-  document.title='タスク管理マトリクス — '+(wsLabels[WORKSPACE]||WORKSPACE);
+  document.title='タスク管理マトリクス';
 
-  // Add task buttons (quadrant-specific)
   document.querySelectorAll('.add-task-btn').forEach(function(btn){
     btn.addEventListener('click',function(){openAdd(btn.getAttribute('data-quadrant'));});
   });
-
-  // Header: add → S quadrant default
   document.getElementById('header-add-btn').addEventListener('click',function(){openAdd('S');});
-
-  // Duplicate button
   document.getElementById('dup-btn').addEventListener('click',function(){STATE.addNewTab();});
-
-  // Modal
   document.getElementById('modal-x').addEventListener('click',closeModal);
   document.getElementById('cancel-btn').addEventListener('click',closeModal);
   document.getElementById('overlay').addEventListener('click',function(e){if(e.target===document.getElementById('overlay'))closeModal();});
@@ -1181,6 +1251,53 @@ document.addEventListener('DOMContentLoaded',function(){
   document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeModal();closeListModal();}});
   document.getElementById('list-modal-x').addEventListener('click',closeListModal);
   document.getElementById('list-overlay').addEventListener('click',function(e){if(e.target===document.getElementById('list-overlay'))closeListModal();});
+}
+
+/* 旧データ（/unashi/）を新パスに一回だけ移行 */
+function migrateLegacyData(cb){
+  fbLoad('data').then(function(existing){
+    if(existing&&existing.tabs&&existing.tabs.length){cb();return;}
+    // 新パスにデータなし → 旧パスを確認
+    fetch(FB+'/unashi/data.json').then(function(r){return r.ok?r.json():null;}).then(function(old){
+      if(old&&old.tabs&&old.tabs.length){
+        fbSave('data',old);
+        fetch(FB+'/unashi/labels.json').then(function(r){return r.ok?r.json():null;}).then(function(oldL){
+          if(oldL)fbSave('labels',oldL);
+          showToast('既存データを移行しました ✓');cb();
+        }).catch(function(){cb();});
+      } else {cb();}
+    }).catch(function(){cb();});
+  });
+}
+
+/* =====================================================
+   Boot（認証状態で分岐）
+===================================================== */
+document.addEventListener('DOMContentLoaded',function(){
+  // ログインボタン
+  document.getElementById('google-login-btn').addEventListener('click',function(){
+    document.getElementById('auth-err').textContent='';
+    _fbAuth.signInWithPopup(_gProvider).catch(function(err){
+      document.getElementById('auth-err').textContent='ログインに失敗しました。もう一度お試しください。';
+      console.error(err);
+    });
+  });
+  // ログアウトボタン
+  document.getElementById('logout-btn').addEventListener('click',function(){
+    _fbAuth.signOut().then(function(){location.reload();});
+  });
+  // 認証状態を監視
+  _fbAuth.onAuthStateChanged(function(user){
+    if(user){
+      CURRENT_UID=user.uid;
+      _refreshToken().then(function(){
+        document.getElementById('auth-screen').style.display='none';
+        migrateLegacyData(function(){initApp();});
+      });
+    } else {
+      document.getElementById('auth-screen').style.display='flex';
+    }
+  });
 });
 </script>
 </body>
