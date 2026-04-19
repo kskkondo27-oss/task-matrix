@@ -1446,7 +1446,11 @@ function loadUserGroups(cb){
     if(_authToken)url+='?auth='+_authToken;
     fetch(url).then(function(r){return r.ok?r.json():null;}).then(function(d){
       if(d&&typeof d==='object'){
-        USER_GROUPS=Object.keys(d).map(function(gid){return Object.assign({id:gid},d[gid]);});
+        USER_GROUPS=Object.keys(d).map(function(gid){
+          var m=d[gid];
+          // Firebase保存時は groupName、コード内は name で統一
+          return {id:gid,name:m.groupName||m.name||'(名前なし)',role:m.role||'member',joinedAt:m.joinedAt||''};
+        });
       } else {USER_GROUPS=[];}
       if(cb)cb();
     }).catch(function(){USER_GROUPS=[];if(cb)cb();});
