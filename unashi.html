@@ -1377,18 +1377,32 @@ var _labelsListenersInited=false;
 
 function applyLabels(d){document.querySelectorAll('.editable[data-key]').forEach(function(el){var k=el.getAttribute('data-key');if(d[k]!==undefined)el.textContent=d[k];});}
 
+/* 旧ラベル（りささん表記）が残っていないか判定 */
+function _hasLegacyLabels(d){
+  if(!d)return false;
+  return Object.values(d).join('|').indexOf('りささん')!==-1;
+}
+
 function initLabels(){
   // ローカルストレージからラベルを適用
   try{applyLabels(JSON.parse(localStorage.getItem(STATE.LKEY)||'{}'));}catch(e){}
   // Firebase からラベルを取得
   fbLoad('labels').then(function(d){
     if(d&&Object.keys(d).length){
-      applyLabels(d);
-      try{localStorage.setItem(STATE.LKEY,JSON.stringify(d));}catch(e){}
+      // 旧テキスト（りささん）が残っていたら新デフォルトに自動移行
+      if(_hasLegacyLabels(d)){
+        applyLabels(DEFAULT_LABELS);
+        fbSave('labels',DEFAULT_LABELS);
+        try{localStorage.setItem(STATE.LKEY,JSON.stringify(DEFAULT_LABELS));}catch(e){}
+      } else {
+        applyLabels(d);
+        try{localStorage.setItem(STATE.LKEY,JSON.stringify(d));}catch(e){}
+      }
     } else {
-      // 新しいワークスペース → 現在のDOM値を保存
-      var l={};document.querySelectorAll('.editable[data-key]').forEach(function(x){l[x.getAttribute('data-key')]=x.textContent;});
-      fbSave('labels',l);
+      // 新しいワークスペース → デフォルト値を保存
+      applyLabels(DEFAULT_LABELS);
+      fbSave('labels',DEFAULT_LABELS);
+      try{localStorage.setItem(STATE.LKEY,JSON.stringify(DEFAULT_LABELS));}catch(e){}
     }
   });
   // Firebase リアルタイム更新
