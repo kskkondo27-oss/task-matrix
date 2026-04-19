@@ -292,6 +292,49 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
 .logout-btn{font-size:11px;color:var(--text-muted);background:transparent;border:1px solid var(--card-border);border-radius:6px;padding:4px 9px;cursor:pointer;font-family:inherit;transition:all .15s;white-space:nowrap}
 .logout-btn:hover{background:#fee2e2;border-color:#dc2626;color:#dc2626}
 
+/* =====================================================
+   ワークスペースタブ（タブバー左端の固定タブ）
+===================================================== */
+.ws-tab{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:0 13px;
+  cursor:pointer;
+  font-size:12px;font-weight:600;
+  color:var(--text-sub);
+  border-bottom:2.5px solid transparent;
+  white-space:nowrap;
+  flex-shrink:0;
+  transition:color .15s,border-color .15s,background .15s;
+  user-select:none;
+  position:relative;
+}
+.ws-tab:hover{color:var(--text);background:#f0f4ff}
+.ws-tab.ws-active{color:#4f46e5;font-weight:700;border-bottom-color:#4f46e5}
+.ws-tab-icon{font-size:13px;flex-shrink:0;line-height:1}
+.ws-tab-add{color:var(--text-muted);font-size:12px;gap:4px}
+.ws-tab-add:hover{color:var(--indigo);background:var(--indigo-light)}
+.ws-sep{width:1px;background:var(--card-border);margin:9px 6px;flex-shrink:0;align-self:stretch}
+.ws-invite-btn{
+  font-size:11px;margin-left:2px;padding:1px 5px;border-radius:4px;
+  opacity:.55;transition:opacity .15s,background .15s;line-height:1.5;flex-shrink:0;
+}
+.ws-tab:hover .ws-invite-btn{opacity:1}
+.ws-invite-btn:hover{background:rgba(99,102,241,.18)!important}
+
+/* =====================================================
+   グループ関連モーダル
+===================================================== */
+.grp-ov{position:fixed;inset:0;background:rgba(15,20,30,.4);z-index:400;display:flex;align-items:center;justify-content:center;padding:20px;opacity:0;pointer-events:none;transition:opacity .2s}
+.grp-ov.open{opacity:1;pointer-events:all}
+.grp-modal{background:#fff;border-radius:18px;width:100%;max-width:440px;box-shadow:0 24px 64px rgba(0,0,0,.18);transform:translateY(12px);transition:transform .2s;padding:28px 28px 24px}
+.grp-ov.open .grp-modal{transform:translateY(0)}
+.grp-ttl{font-size:17px;font-weight:800;margin-bottom:6px;color:var(--text)}
+.grp-sub{font-size:13px;color:var(--text-sub);margin-bottom:20px;line-height:1.6}
+.inv-box{background:#f5f3ff;border:1.5px solid #c7d2fe;border-radius:10px;padding:12px 14px;font-size:12px;font-family:monospace;word-break:break-all;color:#3730a3;margin:12px 0;cursor:pointer;transition:background .15s;user-select:all;min-height:44px}
+.inv-box:hover{background:#ede9fe}
+.inv-actions{display:flex;gap:8px;margin-top:4px}
+.inv-note{font-size:11px;color:var(--text-muted);margin-top:8px;line-height:1.5}
+
 /* Responsive */
 @media(max-width:860px){
   :root{--gap:28px}
@@ -508,6 +551,52 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
 
 <div class="toast" id="toast"></div>
 
+<!-- ===== グループ作成モーダル ===== -->
+<div class="grp-ov" id="grp-ov">
+  <div class="grp-modal">
+    <div class="grp-ttl">グループを作成</div>
+    <p class="grp-sub">グループ名を入力してください。<br>作成後、招待リンクでメンバーを招待できます。</p>
+    <div class="fg">
+      <label class="fl">グループ名 <span style="color:#dc2626">*</span></label>
+      <input type="text" class="fi" id="grp-name-input" placeholder="例: プロジェクトA チーム" maxlength="40"/>
+      <p class="auth-err" id="grp-err" style="margin-top:8px"></p>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+      <button class="btn" id="grp-cancel-btn">キャンセル</button>
+      <button class="btn btn-primary" id="grp-create-btn">作成する</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===== 招待リンクモーダル ===== -->
+<div class="grp-ov" id="inv-ov">
+  <div class="grp-modal">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+      <div class="grp-ttl" style="margin-bottom:0">招待リンク</div>
+      <button class="modal-x" id="inv-close-btn">✕</button>
+    </div>
+    <p class="grp-sub">このリンクを共有してメンバーを招待できます。リンクは24時間有効です。</p>
+    <div class="inv-box" id="inv-link-box">リンクを生成中...</div>
+    <div class="inv-actions">
+      <button class="btn btn-primary" id="inv-copy-btn">📋 コピー</button>
+      <button class="btn" id="inv-new-btn">🔄 再生成</button>
+    </div>
+    <p class="inv-note">リンクを知っているGoogleアカウントのユーザーが参加できます。</p>
+  </div>
+</div>
+
+<!-- ===== グループ参加確認モーダル ===== -->
+<div class="grp-ov" id="join-ov">
+  <div class="grp-modal">
+    <div class="grp-ttl">グループに参加</div>
+    <p class="grp-sub" id="join-msg">招待リンクを確認中...</p>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px">
+      <button class="btn" id="join-cancel-btn">キャンセル</button>
+      <button class="btn btn-primary" id="join-confirm-btn">参加する</button>
+    </div>
+  </div>
+</div>
+
 <!-- ===== List Modal ===== -->
 <div class="list-ov" id="list-overlay">
   <div class="list-modal" role="dialog" aria-modal="true">
@@ -544,8 +633,27 @@ var CURRENT_UID=null;
 var _authToken=null;
 var _esMap={};
 
+/* =====================================================
+   ワークスペース管理
+===================================================== */
+var CURRENT_WORKSPACE={type:'personal',groupId:null};
+var USER_GROUPS=[];   // [{id,name,role,joinedAt}]
+var _pendingInviteToken=null;
+var _currentInviteGroupId=null;
+var DEFAULT_LABELS={
+  's-title':'最重要（今すぐやる）','s-desc':'今すぐりささんが動くべきタスク','s-sub':'緊急 × 重要',
+  'a-title':'りささんタスク','a-desc':'りささんが取り組む重要タスク','a-sub':'非緊急 × 重要',
+  'b-title':'りささんがその日にやる・または誰かに任せる','b-desc':'当日処理 or 委任','b-sub':'緊急 × 非重要',
+  'c-title':'いったん置いておく','c-desc':'保留・後回し・削除候補','c-sub':'非緊急 × 非重要'
+};
+
 function _fp(k){
-  var base=FB+'/users/'+CURRENT_UID+'/'+k+'.json';
+  var base;
+  if(CURRENT_WORKSPACE.type==='group'&&CURRENT_WORKSPACE.groupId){
+    base=FB+'/groups/'+CURRENT_WORKSPACE.groupId+'/'+k+'.json';
+  } else {
+    base=FB+'/users/'+CURRENT_UID+'/'+k+'.json';
+  }
   return _authToken?base+'?auth='+_authToken:base;
 }
 function _refreshToken(){
@@ -607,8 +715,18 @@ var STATE={
   tasks:[],      // [{id,tabId,quadrant,title,owner,dueDate,actions,isCompleted,sortOrder,createdAt,updatedAt,completedAt}]
   activeTabId:null,
   /* ストレージキーはワークスペース単位で完全分離 */
-  get DKEY(){return 'tm-data-v3-'+(CURRENT_UID||'anon');},
-  get LKEY(){return 'tm-labels-v1-'+(CURRENT_UID||'anon');},
+  get DKEY(){
+    if(CURRENT_WORKSPACE.type==='group'&&CURRENT_WORKSPACE.groupId){
+      return 'tm-data-v3-grp-'+CURRENT_WORKSPACE.groupId;
+    }
+    return 'tm-data-v3-'+(CURRENT_UID||'anon');
+  },
+  get LKEY(){
+    if(CURRENT_WORKSPACE.type==='group'&&CURRENT_WORKSPACE.groupId){
+      return 'tm-labels-v1-grp-'+CURRENT_WORKSPACE.groupId;
+    }
+    return 'tm-labels-v1-'+(CURRENT_UID||'anon');
+  },
 
   /* ---- persistence ---- */
   save:function(){
@@ -790,11 +908,64 @@ var STATE={
 var DRAG={id:null};
 
 /* =====================================================
-   Render tabs
+   Render tabs（ワークスペースタブ + ページタブ）
 ===================================================== */
 function renderTabs(){
   var bar=document.getElementById('tab-bar');
   bar.innerHTML='';
+
+  /* ---- ワークスペースタブ（左端固定） ---- */
+  // 「個人」タブ
+  var pTab=document.createElement('div');
+  pTab.className='ws-tab'+(CURRENT_WORKSPACE.type==='personal'?' ws-active':'');
+  pTab.title='個人ワークスペース';
+  pTab.innerHTML='<span class="ws-tab-icon">👤</span><span>個人</span>';
+  pTab.addEventListener('click',function(){
+    if(CURRENT_WORKSPACE.type==='personal')return;
+    switchWorkspace('personal',null);
+  });
+  bar.appendChild(pTab);
+
+  // グループタブ（各グループ）
+  USER_GROUPS.forEach(function(grp){
+    var isActive=CURRENT_WORKSPACE.type==='group'&&CURRENT_WORKSPACE.groupId===grp.id;
+    var gTab=document.createElement('div');
+    gTab.className='ws-tab'+(isActive?' ws-active':'');
+    gTab.title=grp.name;
+
+    var icon=document.createElement('span');icon.className='ws-tab-icon';icon.textContent='👥';
+    var nameEl=document.createElement('span');nameEl.className='tab-name-span';nameEl.textContent=grp.name;
+    gTab.appendChild(icon);gTab.appendChild(nameEl);
+
+    // 招待ボタン（全メンバー表示）
+    var invBtn=document.createElement('span');
+    invBtn.className='ws-invite-btn';invBtn.title='招待リンクを表示';invBtn.textContent='🔗';
+    invBtn.addEventListener('click',function(e){
+      e.stopPropagation();
+      openInviteModal(grp.id);
+    });
+    gTab.appendChild(invBtn);
+
+    gTab.addEventListener('click',function(e){
+      if(e.target===invBtn||invBtn.contains(e.target))return;
+      if(!isActive)switchWorkspace('group',grp.id);
+    });
+    bar.appendChild(gTab);
+  });
+
+  // 「＋グループ」ボタン
+  var addGrp=document.createElement('div');
+  addGrp.className='ws-tab ws-tab-add';
+  addGrp.title='新しいグループを作成';
+  addGrp.innerHTML='<span style="font-size:14px;font-weight:400">＋</span><span>グループ</span>';
+  addGrp.addEventListener('click',function(){openGroupModal();});
+  bar.appendChild(addGrp);
+
+  // セパレーター
+  var sep=document.createElement('div');sep.className='ws-sep';
+  bar.appendChild(sep);
+
+  /* ---- ページタブ（既存タブ） ---- */
   STATE.tabs.forEach(function(tab){
     var div=document.createElement('div');
     div.className='tab-item'+(tab.id===STATE.activeTabId?' active':'');
@@ -810,20 +981,16 @@ function renderTabs(){
     editIcon.className='tab-edit-icon';editIcon.title='ダブルクリックで名前変更';editIcon.textContent='✎';
     div.appendChild(editIcon);
 
-    // switch on click (not during rename)
     div.addEventListener('click',function(e){
       if(e.target.classList.contains('tab-edit-icon')){
         startRename(tab.id,div,nameSpan);return;
       }
       STATE.switchTab(tab.id);
     });
-
-    // double-click to rename
     nameSpan.addEventListener('dblclick',function(e){
       e.stopPropagation();
       startRename(tab.id,div,nameSpan);
     });
-
     bar.appendChild(div);
   });
 }
@@ -1174,22 +1341,44 @@ function showToast(msg){
 }
 
 /* =====================================================
-   Editable labels (global, shared across tabs)
+   Editable labels（ワークスペース切替時も再利用可能）
 ===================================================== */
+var _labelsListenersInited=false;
+
 function applyLabels(d){document.querySelectorAll('.editable[data-key]').forEach(function(el){var k=el.getAttribute('data-key');if(d[k]!==undefined)el.textContent=d[k];});}
+
 function initLabels(){
+  // ローカルストレージからラベルを適用
   try{applyLabels(JSON.parse(localStorage.getItem(STATE.LKEY)||'{}'));}catch(e){}
-  fbLoad('labels').then(function(d){if(d&&Object.keys(d).length){applyLabels(d);try{localStorage.setItem(STATE.LKEY,JSON.stringify(d));}catch(e){}}else{var l={};document.querySelectorAll('.editable[data-key]').forEach(function(x){l[x.getAttribute('data-key')]=x.textContent;});fbSave('labels',l);}});
-  fbWatch('labels',function(d){if(d){applyLabels(d);try{localStorage.setItem(STATE.LKEY,JSON.stringify(d));}catch(e){}}}); 
-  document.querySelectorAll('.editable').forEach(function(el){
-    el.setAttribute('contenteditable','true');el.setAttribute('spellcheck','false');
-    el.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();el.blur();}});
-    el.addEventListener('blur',function(){
-      var d={};document.querySelectorAll('.editable[data-key]').forEach(function(x){d[x.getAttribute('data-key')]=x.textContent;});
+  // Firebase からラベルを取得
+  fbLoad('labels').then(function(d){
+    if(d&&Object.keys(d).length){
+      applyLabels(d);
       try{localStorage.setItem(STATE.LKEY,JSON.stringify(d));}catch(e){}
-      fbSave('labels',d);
-    });
+    } else {
+      // 新しいワークスペース → 現在のDOM値を保存
+      var l={};document.querySelectorAll('.editable[data-key]').forEach(function(x){l[x.getAttribute('data-key')]=x.textContent;});
+      fbSave('labels',l);
+    }
   });
+  // Firebase リアルタイム更新
+  fbWatch('labels',function(d){
+    if(d){applyLabels(d);try{localStorage.setItem(STATE.LKEY,JSON.stringify(d));}catch(e){}
+    }
+  });
+  // イベントリスナーは最初の一回だけ登録
+  if(!_labelsListenersInited){
+    _labelsListenersInited=true;
+    document.querySelectorAll('.editable').forEach(function(el){
+      el.setAttribute('contenteditable','true');el.setAttribute('spellcheck','false');
+      el.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();el.blur();}});
+      el.addEventListener('blur',function(){
+        var d={};document.querySelectorAll('.editable[data-key]').forEach(function(x){d[x.getAttribute('data-key')]=x.textContent;});
+        try{localStorage.setItem(STATE.LKEY,JSON.stringify(d));}catch(e){}
+        fbSave('labels',d);
+      });
+    });
+  }
 }
 
 /* =====================================================
@@ -1202,6 +1391,202 @@ function initAxis(){
 }
 
 /* =====================================================
+   Firebase データ同期コールバック（共通）
+===================================================== */
+function _onDataSync(d){
+  if(_fl||!d||!d.tabs)return;
+  if((d.tasks||[]).length<STATE.tasks.length)return;
+  _fl=true;
+  STATE.tabs=d.tabs;STATE.tasks=STATE._normalize(d.tasks);
+  if(!STATE.tabs.find(function(t){return t.id===STATE.activeTabId;})){
+    STATE.activeTabId=d.activeTabId||d.tabs[0].id;
+  }
+  try{localStorage.setItem(STATE.DKEY,JSON.stringify(d));}catch(e){}
+  _fl=false;renderTabs();renderMatrix();
+}
+
+/* =====================================================
+   グループ管理
+===================================================== */
+
+/* グループメンバーシップをロード */
+function loadUserGroups(cb){
+  _refreshToken().then(function(){
+    var url=FB+'/users/'+CURRENT_UID+'/groupMemberships.json';
+    if(_authToken)url+='?auth='+_authToken;
+    fetch(url).then(function(r){return r.ok?r.json():null;}).then(function(d){
+      if(d&&typeof d==='object'){
+        USER_GROUPS=Object.keys(d).map(function(gid){return Object.assign({id:gid},d[gid]);});
+      } else {USER_GROUPS=[];}
+      if(cb)cb();
+    }).catch(function(){USER_GROUPS=[];if(cb)cb();});
+  });
+}
+
+/* ワークスペース切り替え */
+function switchWorkspace(type,groupId){
+  // 既存SSE接続を全て閉じる
+  Object.keys(_esMap).forEach(function(k){try{_esMap[k].close();}catch(e){}delete _esMap[k];});
+
+  CURRENT_WORKSPACE={type:type,groupId:groupId||null};
+
+  // ヘッダーバッジ更新
+  var wb=document.getElementById('ws-badge');
+  if(wb){
+    if(type==='group'){
+      var grp=USER_GROUPS.find(function(g){return g.id===groupId;});
+      wb.textContent=grp?grp.name:'グループ';wb.style.display='';
+    } else {wb.style.display='none';}
+  }
+
+  // ラベルをデフォルトにリセット（新ワークスペース用）
+  applyLabels(DEFAULT_LABELS);
+
+  // STATE を新ワークスペースのデータでロード
+  STATE.tabs=[];STATE.tasks=[];STATE.activeTabId=null;
+  STATE.load();
+
+  // Firebase Watch 再セットアップ
+  fbWatch('data',_onDataSync);
+  initLabels();
+
+  renderTabs();renderMatrix();
+  showToast(type==='group'?'グループ: '+(USER_GROUPS.find(function(g){return g.id===groupId;})||{name:'グループ'}).name:'個人ワークスペース に切り替えました');
+}
+
+/* グループ作成モーダル */
+function openGroupModal(){
+  document.getElementById('grp-name-input').value='';
+  document.getElementById('grp-err').textContent='';
+  document.getElementById('grp-ov').classList.add('open');
+  setTimeout(function(){document.getElementById('grp-name-input').focus();},60);
+}
+function closeGroupModal(){document.getElementById('grp-ov').classList.remove('open');}
+function createGroup(){
+  var name=(document.getElementById('grp-name-input').value||'').trim();
+  if(!name){document.getElementById('grp-err').textContent='グループ名を入力してください';return;}
+  var btn=document.getElementById('grp-create-btn');
+  btn.disabled=true;btn.textContent='作成中...';
+  var gid='grp-'+uid();
+  var now=new Date().toISOString();
+  var groupInfo={name:name,createdBy:CURRENT_UID,createdAt:now};
+  var memberData={role:'admin',joinedAt:now,displayName:(_fbAuth.currentUser&&_fbAuth.currentUser.displayName)||''};
+  var membership={role:'admin',groupName:name,joinedAt:now};
+  _refreshToken().then(function(){
+    Promise.all([
+      fetch(FB+'/groups/'+gid+'/info.json?auth='+_authToken,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(groupInfo)}),
+      fetch(FB+'/groups/'+gid+'/members/'+CURRENT_UID+'.json?auth='+_authToken,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(memberData)}),
+      fetch(FB+'/users/'+CURRENT_UID+'/groupMemberships/'+gid+'.json?auth='+_authToken,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(membership)})
+    ]).then(function(){
+      USER_GROUPS.push({id:gid,name:name,role:'admin',joinedAt:now});
+      btn.disabled=false;btn.textContent='作成する';
+      closeGroupModal();
+      showToast('グループ「'+name+'」を作成しました ✓');
+      switchWorkspace('group',gid);
+    }).catch(function(){
+      document.getElementById('grp-err').textContent='作成に失敗しました。もう一度お試しください。';
+      btn.disabled=false;btn.textContent='作成する';
+    });
+  });
+}
+
+/* 招待リンクモーダル */
+function openInviteModal(groupId){
+  _currentInviteGroupId=groupId;
+  var box=document.getElementById('inv-link-box');
+  box.textContent='リンクを生成中...';
+  box.removeAttribute('data-url');
+  document.getElementById('inv-ov').classList.add('open');
+  generateInviteLink(groupId);
+}
+function closeInviteModal(){
+  document.getElementById('inv-ov').classList.remove('open');
+  _currentInviteGroupId=null;
+}
+function generateInviteLink(groupId){
+  var token=uid()+uid();
+  var expires=new Date(Date.now()+24*60*60*1000).toISOString();
+  var invData={groupId:groupId,createdBy:CURRENT_UID,createdAt:new Date().toISOString(),expiresAt:expires};
+  _refreshToken().then(function(){
+    fetch(FB+'/invites/'+token+'.json?auth='+_authToken,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(invData)})
+    .then(function(){
+      var invUrl=location.origin+location.pathname+'?invite='+token;
+      var box=document.getElementById('inv-link-box');
+      box.textContent=invUrl;box.setAttribute('data-url',invUrl);
+    }).catch(function(){
+      document.getElementById('inv-link-box').textContent='リンクの生成に失敗しました';
+    });
+  });
+}
+function copyInviteLink(){
+  var box=document.getElementById('inv-link-box');
+  var url=box.getAttribute('data-url')||box.textContent;
+  if(!url||url.indexOf('http')<0)return;
+  (navigator.clipboard?navigator.clipboard.writeText(url):Promise.reject()).then(function(){
+    showToast('招待リンクをコピーしました ✓');
+  }).catch(function(){
+    var ta=document.createElement('textarea');ta.value=url;
+    document.body.appendChild(ta);ta.select();document.execCommand('copy');document.body.removeChild(ta);
+    showToast('招待リンクをコピーしました ✓');
+  });
+}
+
+/* 招待パラメータの確認（ページ読み込み時） */
+function checkInviteParam(){
+  var params=new URLSearchParams(location.search);
+  var token=params.get('invite');
+  if(!token)return false;
+  _pendingInviteToken=token;
+  return true;
+}
+function processInvite(token){
+  _refreshToken().then(function(){
+    fetch(FB+'/invites/'+token+'.json?auth='+_authToken)
+    .then(function(r){return r.ok?r.json():null;}).then(function(d){
+      if(!d||!d.groupId){showToast('招待リンクが無効または期限切れです');return;}
+      if(d.expiresAt&&new Date(d.expiresAt)<new Date()){showToast('この招待リンクは期限切れです');return;}
+      // グループ情報取得
+      fetch(FB+'/groups/'+d.groupId+'/info.json?auth='+_authToken)
+      .then(function(r){return r.ok?r.json():null;}).then(function(info){
+        var groupName=(info&&info.name)||'グループ';
+        // すでに参加済みか
+        var already=USER_GROUPS.find(function(g){return g.id===d.groupId;});
+        if(already){
+          showToast('すでにこのグループに参加しています');
+          switchWorkspace('group',d.groupId);
+          history.replaceState({},'',location.pathname);return;
+        }
+        // 参加確認モーダル
+        document.getElementById('join-msg').textContent='「'+groupName+'」グループに参加しますか？';
+        document.getElementById('join-ov').classList.add('open');
+        document.getElementById('join-confirm-btn').onclick=function(){joinGroup(d.groupId,groupName);};
+        document.getElementById('join-cancel-btn').onclick=function(){
+          document.getElementById('join-ov').classList.remove('open');
+          history.replaceState({},'',location.pathname);
+        };
+      });
+    }).catch(function(){showToast('招待リンクの確認に失敗しました');});
+  });
+}
+function joinGroup(groupId,groupName){
+  document.getElementById('join-ov').classList.remove('open');
+  var now=new Date().toISOString();
+  var memberData={role:'member',joinedAt:now,displayName:(_fbAuth.currentUser&&_fbAuth.currentUser.displayName)||''};
+  var membership={role:'member',groupName:groupName,joinedAt:now};
+  _refreshToken().then(function(){
+    Promise.all([
+      fetch(FB+'/groups/'+groupId+'/members/'+CURRENT_UID+'.json?auth='+_authToken,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(memberData)}),
+      fetch(FB+'/users/'+CURRENT_UID+'/groupMemberships/'+groupId+'.json?auth='+_authToken,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(membership)})
+    ]).then(function(){
+      USER_GROUPS.push({id:groupId,name:groupName,role:'member',joinedAt:now});
+      history.replaceState({},'',location.pathname);
+      showToast('「'+groupName+'」に参加しました ✓');
+      switchWorkspace('group',groupId);
+    }).catch(function(){showToast('参加に失敗しました。もう一度お試しください。');});
+  });
+}
+
+/* =====================================================
    アプリ初期化（ログイン後に呼ばれる）
 ===================================================== */
 var _appInited=false;
@@ -1209,16 +1594,7 @@ function initApp(){
   if(_appInited)return; _appInited=true;
 
   STATE.load();
-  fbWatch('data',function(d){
-    if(_fl||!d||!d.tabs)return;
-    if((d.tasks||[]).length<STATE.tasks.length)return;
-    _fl=true;STATE.tabs=d.tabs;STATE.tasks=STATE._normalize(d.tasks);
-    if(!STATE.tabs.find(function(t){return t.id===STATE.activeTabId;})){
-      STATE.activeTabId=d.activeTabId||d.tabs[0].id;
-    }
-    try{localStorage.setItem(STATE.DKEY,JSON.stringify(d));}catch(e){}
-    _fl=false;renderTabs();renderMatrix();
-  });
+  fbWatch('data',_onDataSync);
   renderTabs();renderMatrix();setupDropZones();initLabels();initAxis();
 
   // ユーザー情報をヘッダーに表示
@@ -1232,6 +1608,17 @@ function initApp(){
     var wb=document.getElementById('ws-badge');if(wb)wb.style.display='none';
   }
   document.title='タスク管理マトリクス';
+
+  // グループメンバーシップをロードしてタブを再描画
+  loadUserGroups(function(){
+    renderTabs();
+    // 招待リンクがある場合は処理
+    if(_pendingInviteToken){
+      var token=_pendingInviteToken;
+      _pendingInviteToken=null;
+      processInvite(token);
+    }
+  });
 
   document.querySelectorAll('.add-task-btn').forEach(function(btn){
     btn.addEventListener('click',function(){openAdd(btn.getAttribute('data-quadrant'));});
@@ -1248,9 +1635,22 @@ function initApp(){
   document.getElementById('del-btn').addEventListener('click',function(){
     if(EDITING_ID&&confirm('このタスクを削除しますか？')){STATE.removeTask(EDITING_ID);renderMatrix();closeModal();showToast('削除しました');}
   });
-  document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeModal();closeListModal();}});
+  document.addEventListener('keydown',function(e){if(e.key==='Escape'){closeModal();closeListModal();closeGroupModal();closeInviteModal();}});
   document.getElementById('list-modal-x').addEventListener('click',closeListModal);
   document.getElementById('list-overlay').addEventListener('click',function(e){if(e.target===document.getElementById('list-overlay'))closeListModal();});
+
+  // グループ作成モーダル
+  document.getElementById('grp-cancel-btn').addEventListener('click',closeGroupModal);
+  document.getElementById('grp-create-btn').addEventListener('click',createGroup);
+  document.getElementById('grp-name-input').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();createGroup();}});
+  document.getElementById('grp-ov').addEventListener('click',function(e){if(e.target===document.getElementById('grp-ov'))closeGroupModal();});
+
+  // 招待リンクモーダル
+  document.getElementById('inv-close-btn').addEventListener('click',closeInviteModal);
+  document.getElementById('inv-copy-btn').addEventListener('click',copyInviteLink);
+  document.getElementById('inv-new-btn').addEventListener('click',function(){if(_currentInviteGroupId)generateInviteLink(_currentInviteGroupId);});
+  document.getElementById('inv-ov').addEventListener('click',function(e){if(e.target===document.getElementById('inv-ov'))closeInviteModal();});
+  document.getElementById('inv-link-box').addEventListener('click',copyInviteLink);
 }
 
 /* 旧データ（/unashi/）を新パスに一回だけ移行 */
@@ -1274,6 +1674,9 @@ function migrateLegacyData(cb){
    Boot（認証状態で分岐）
 ===================================================== */
 document.addEventListener('DOMContentLoaded',function(){
+  // 招待パラメータを事前チェック（認証前に保持）
+  checkInviteParam();
+
   // ログインボタン
   document.getElementById('google-login-btn').addEventListener('click',function(){
     document.getElementById('auth-err').textContent='';
