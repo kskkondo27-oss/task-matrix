@@ -425,7 +425,7 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
         <div class="card-meta">
           <div class="card-rank">S</div>
           <div class="card-title editable" data-key="s-title">最重要（今すぐやる）</div>
-          <div class="card-desc editable" data-key="s-desc">今すぐりささんが動くべきタスク</div>
+          <div class="card-desc editable" data-key="s-desc">すぐに結果(利益、向上)に結びつくタスク</div>
           <div class="card-sub editable" data-key="s-sub">緊急 × 重要</div>
         </div>
         <span class="count-badge" id="badge-S">0</span>
@@ -444,8 +444,8 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
         <div class="card-icon">🎯</div>
         <div class="card-meta">
           <div class="card-rank">A</div>
-          <div class="card-title editable" data-key="a-title">りささんタスク</div>
-          <div class="card-desc editable" data-key="a-desc">りささんが取り組む重要タスク</div>
+          <div class="card-title editable" data-key="a-title">重要だが期限に迫られていないもの</div>
+          <div class="card-desc editable" data-key="a-desc">戦略的、戦術的で熟成が必要</div>
           <div class="card-sub editable" data-key="a-sub">非緊急 × 重要</div>
         </div>
         <span class="count-badge" id="badge-A">0</span>
@@ -464,8 +464,8 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
         <div class="card-icon">⚡</div>
         <div class="card-meta">
           <div class="card-rank">B</div>
-          <div class="card-title editable" data-key="b-title">りささんがその日にやる・または誰かに任せる</div>
-          <div class="card-desc editable" data-key="b-desc">当日処理 or 委任</div>
+          <div class="card-title editable" data-key="b-title">期限内に終えないとリスクがあるもの</div>
+          <div class="card-desc editable" data-key="b-desc">なる早で処理</div>
           <div class="card-sub editable" data-key="b-sub">緊急 × 非重要</div>
         </div>
         <span class="count-badge" id="badge-B">0</span>
@@ -671,9 +671,9 @@ var USER_GROUPS=[];   // [{id,name,role,joinedAt}]
 var _pendingInviteToken=null;
 var _currentInviteGroupId=null;
 var DEFAULT_LABELS={
-  's-title':'最重要（今すぐやる）','s-desc':'今すぐりささんが動くべきタスク','s-sub':'緊急 × 重要',
-  'a-title':'りささんタスク','a-desc':'りささんが取り組む重要タスク','a-sub':'非緊急 × 重要',
-  'b-title':'りささんがその日にやる・または誰かに任せる','b-desc':'当日処理 or 委任','b-sub':'緊急 × 非重要',
+  's-title':'最重要（今すぐやる）','s-desc':'すぐに結果(利益、向上)に結びつくタスク','s-sub':'緊急 × 重要',
+  'a-title':'重要だが期限に迫られていないもの','a-desc':'戦略的、戦術的で熟成が必要','a-sub':'非緊急 × 重要',
+  'b-title':'期限内に終えないとリスクがあるもの','b-desc':'なる早で処理','b-sub':'緊急 × 非重要',
   'c-title':'いったん置いておく','c-desc':'保留・後回し・削除候補','c-sub':'非緊急 × 非重要'
 };
 
