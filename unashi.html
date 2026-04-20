@@ -176,6 +176,14 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
 .tc-has-memo{font-size:10px;opacity:.55;margin-left:2px;vertical-align:middle}
 
 /* =====================================================
+   Phase 4: グループタスク（個人ビュー表示用）
+===================================================== */
+.task-card-group{border-left:3px solid #7c3aed;background:#faf5ff;cursor:pointer}
+.task-card-group:hover{background:#f3e8ff;border-left-color:#6d28d9;box-shadow:0 2px 8px rgba(124,58,237,.12)}
+.tc-group-badge{display:inline-flex;align-items:center;font-size:10px;font-weight:600;background:#7c3aed;color:#fff;padding:1px 7px;border-radius:999px;letter-spacing:.3px}
+.grp-tasks-divider{font-size:10px;color:var(--text-muted);margin:6px 0 2px;padding-left:2px;letter-spacing:.3px;font-weight:500;opacity:.6;text-align:center}
+
+/* =====================================================
    期日アラート背景
 ===================================================== */
 .task-card.alert-today{background:#FEE2E2!important;border-color:#fca5a5}
@@ -524,9 +532,17 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
         <input type="text" class="fi" id="f-title" placeholder="タスク名を入力してください"/>
       </div>
       <div class="frow">
-        <div class="fg">
+        <!-- 個人ワークスペース：自由入力 -->
+        <div class="fg" id="fg-owner">
           <label class="fl">担当者 <span style="color:#dc2626">*</span></label>
           <input type="text" class="fi" id="f-owner" placeholder="担当者名"/>
+        </div>
+        <!-- グループワークスペース：メンバー選択（個人連携用） -->
+        <div class="fg" id="fg-assignee" style="display:none">
+          <label class="fl">担当者（グループ連携）</label>
+          <select class="fsel" id="f-assignee">
+            <option value="">── 未割り当て ──</option>
+          </select>
         </div>
         <div class="fg">
           <label class="fl">期日 <span style="color:#dc2626">*</span></label>
@@ -667,7 +683,10 @@ var _esMap={};
    ワークスペース管理
 ===================================================== */
 var CURRENT_WORKSPACE={type:'personal',groupId:null};
-var USER_GROUPS=[];   // [{id,name,role,joinedAt}]
+var USER_GROUPS=[];           // [{id,name,role,joinedAt}]
+var GROUP_DATA_CACHE={};      // Phase 4: {groupId: data} グループタスクキャッシュ（個人ビュー用）
+var _grpWatchers={};          // Phase 4: {groupId: EventSource}
+var GROUP_MEMBERS_CACHE={};   // Phase 4: {groupId: [{uid,displayName,role,...}]}
 var _pendingInviteToken=null;
 var _currentInviteGroupId=null;
 var _wsToken=0; // ワークスペース切替のたびにインクリメント（非同期コールバックの無効化用）
@@ -722,6 +741,107 @@ function fbWatch(k,cb){
     });
   }
   connect();
+}
+
+/* =====================================================
+   Phase 4: グループタスク リアルタイム監視（個人ビュー用）
+   個人ワークスペース表示中、参加グループ全てを監視し
+   GROUP_DATA_CACHE を更新 → renderMatrix() をトリガー
+===================================================== */
+function stopGroupWatchers(){
+  Object.keys(_grpWatchers).forEach(function(gid){
+    try{_grpWatchers[gid].close();}catch(e){}
+  });
+  _grpWatchers={};
+  console.log('[GRP-WATCH] stopped all watchers');
+}
+
+function watchGroupForPersonal(groupId){
+  if(typeof EventSource==='undefined')return;
+  function connect(){
+    _refreshToken().then(function(t){
+      var base=FB+'/groups/'+groupId+'/data.json';
+      var url=t?base+'?auth='+t:base;
+      var es=new EventSource(url);
+      _grpWatchers[groupId]=es;
+      es.addEventListener('put',function(e){
+        try{
+          var m=JSON.parse(e.data);
+          if(m&&m.data!=null){
+            GROUP_DATA_CACHE[groupId]=m.data;
+            console.log('[GRP-WATCH] update gid=',groupId,'tasks=',(m.data.tasks||[]).length);
+            if(CURRENT_WORKSPACE.type==='personal') renderMatrix();
+          }
+        }catch(ex){}
+      });
+      es.onerror=function(){
+        es.close();
+        delete _grpWatchers[groupId];
+        // グループが残っていれば8秒後に再接続
+        setTimeout(function(){
+          if(CURRENT_WORKSPACE.type==='personal'&&USER_GROUPS.find(function(g){return g.id===groupId;})){
+            watchGroupForPersonal(groupId);
+          }
+        },8000);
+      };
+    });
+  }
+  connect();
+}
+
+function startGroupWatchers(){
+  stopGroupWatchers();
+  USER_GROUPS.forEach(function(grp){
+    watchGroupForPersonal(grp.id);
+  });
+  console.log('[GRP-WATCH] started watchers for',USER_GROUPS.length,'group(s)');
+}
+
+/* 個人ビュー用: 自分が担当者のグループタスクを象限で絞り込んで収集
+   条件: task.assigneeUid===CURRENT_UID
+      OR action.assigneeUid===CURRENT_UID（アクション担当者） */
+function getGroupTasksForQuadrant(q){
+  var result=[];
+  USER_GROUPS.forEach(function(grp){
+    var d=GROUP_DATA_CACHE[grp.id];
+    if(!d||!d.tasks)return;
+    d.tasks.filter(function(t){
+      if(t.quadrant!==q||t.isCompleted)return false;
+      // タスク担当者が自分
+      if(t.assigneeUid===CURRENT_UID)return true;
+      // アクションの担当者が自分
+      return (t.actions||[]).some(function(a){return a.assigneeUid===CURRENT_UID;});
+    }).forEach(function(t){
+      result.push({task:t,grp:grp});
+    });
+  });
+  return result;
+}
+
+/* グループタスクカード（読み取り専用・クリックでグループへ移動） */
+function makeGroupTaskEl(task,grp){
+  var el=document.createElement('div');
+  el.className='task-card task-card-group';
+  el.title=grp.name+' のタスク（クリックで移動）';
+  var acts=task.actions||[];
+  var atotal=acts.length,adone=acts.filter(function(a){return a.isDone;}).length;
+  var progTxt=atotal>0?(adone+'/'+atotal+' 完了'):'';
+  var dueStr=task.dueDate?('📅 '+fmtDate(task.dueDate)):'';
+  el.innerHTML=
+    '<div style="margin-bottom:4px"><span class="tc-group-badge">👥 '+esc(grp.name)+'</span></div>'+
+    '<div class="tc-top">'+
+      '<div class="tc-title">'+esc(task.title)+'</div>'+
+    '</div>'+
+    ((progTxt||dueStr)?
+      '<div class="tc-meta">'+
+        (dueStr?'<span class="tc-due">'+dueStr+'</span>':'')+
+        (progTxt?'<span class="tc-prog">'+progTxt+'</span>':'')+
+      '</div>':''
+    );
+  el.addEventListener('click',function(){
+    switchWorkspace('group',grp.id);
+  });
+  return el;
 }
 
 /* =====================================================
@@ -1101,35 +1221,55 @@ function startRename(tabId,container,nameSpan){
 function renderMatrix(){
   var total=STATE.activeCount();
   document.getElementById('total-count').textContent=total+'件';
+  var isPersonal=CURRENT_WORKSPACE.type==='personal';
   ['S','A','B','C'].forEach(function(q){
     var list=document.getElementById('task-list-'+q);
     var badge=document.getElementById('badge-'+q);
     var moreWrap=document.getElementById('more-wrap-'+q);
     if(!list)return;
     var tasks=STATE.byQuadrant(q);
-    // バッジ更新＋クリックで一覧モーダル
+    // Phase 4: 個人ビューのみグループタスクを追加表示
+    var grpItems=isPersonal?getGroupTasksForQuadrant(q):[];
+
+    // バッジ更新（個人＋グループ合算）
     if(badge){
-      badge.textContent=tasks.length;
-      badge.onclick=tasks.length?function(qq){return function(){openListModal(qq);};}(q):null;
+      badge.textContent=tasks.length+grpItems.length;
+      badge.onclick=(tasks.length||grpItems.length)?function(qq){return function(){openListModal(qq);};}(q):null;
     }
     list.innerHTML='';
     if(moreWrap)moreWrap.innerHTML='';
-    if(!tasks.length){
+
+    // 個人・グループ両方ゼロ → empty state
+    if(!tasks.length&&!grpItems.length){
       list.innerHTML='<div class="empty-state"><div class="empty-ico">📋</div><div class="empty-txt">タスクがありません</div></div>';
       return;
     }
-    // 最大2件表示
+
+    // 個人タスク（最大2件、3件以上は「一覧を見る」）
     var visible=tasks.slice(0,2),hidden=tasks.slice(2);
     visible.forEach(function(t){
       try{list.appendChild(makeTaskEl(t));}catch(e){console.error('makeTaskEl error',e,t);}
     });
-    // 3件以上なら「一覧を見る」ボタン
     if(hidden.length&&moreWrap){
       var btn=document.createElement('button');
       btn.className='task-more-btn';
       btn.textContent='＋'+hidden.length+'件 — 一覧を見る';
       btn.addEventListener('click',function(){openListModal(q);});
       moreWrap.appendChild(btn);
+    }
+
+    // Phase 4: グループタスク（個人ビューのみ・全件表示）
+    if(grpItems.length){
+      if(tasks.length){
+        // 個人タスクと視覚的に区切る
+        var div=document.createElement('div');
+        div.className='grp-tasks-divider';
+        div.textContent='── グループ';
+        list.appendChild(div);
+      }
+      grpItems.forEach(function(item){
+        list.appendChild(makeGroupTaskEl(item.task,item.grp));
+      });
     }
   });
 }
@@ -1234,6 +1374,28 @@ function syncQuadOptions(){
   });
 }
 
+/* グループワークスペース時に担当者フィールドをセレクトに切り替える */
+function _setupAssigneeField(members,currentAssigneeUid,currentOwner){
+  var isGroup=CURRENT_WORKSPACE.type==='group';
+  document.getElementById('fg-owner').style.display=isGroup?'none':'';
+  document.getElementById('fg-assignee').style.display=isGroup?'':'none';
+  if(!isGroup)return;
+  var sel=document.getElementById('f-assignee');
+  sel.innerHTML='<option value="">── 未割り当て ──</option>';
+  members.forEach(function(m){
+    var opt=document.createElement('option');
+    opt.value=m.uid;
+    opt.textContent=(m.displayName||'(名前なし)')+(m.uid===CURRENT_UID?' （あなた）':'')+(m.role==='admin'?' 👑':'');
+    if(m.uid===currentAssigneeUid)opt.selected=true;
+    sel.appendChild(opt);
+  });
+  // assigneeUidがないが ownerテキストが一致するメンバーを推測選択
+  if(!currentAssigneeUid&&currentOwner){
+    var matched=members.find(function(m){return(m.displayName||'')=== currentOwner;});
+    if(matched)sel.value=matched.uid;
+  }
+}
+
 function openAdd(q){
   EDITING_ID=null;
   syncQuadOptions();
@@ -1242,7 +1404,16 @@ function openAdd(q){
   document.getElementById('f-due').value='';document.getElementById('f-quad').value=q;
   document.getElementById('f-memo').value='';
   document.getElementById('del-btn').style.display='none';
-  clearErr();renderActions([]);
+  clearErr();
+  if(CURRENT_WORKSPACE.type==='group'&&CURRENT_WORKSPACE.groupId){
+    loadGroupMembersIfNeeded(CURRENT_WORKSPACE.groupId,function(members){
+      _setupAssigneeField(members,null,'');
+      renderActions([],members);
+    });
+  } else {
+    _setupAssigneeField([],null,'');
+    renderActions([],[]);
+  }
   document.getElementById('overlay').classList.add('open');
   setTimeout(function(){document.getElementById('f-title').focus();},60);
 }
@@ -1256,7 +1427,16 @@ function openEdit(id){
   document.getElementById('f-due').value=t.dueDate;document.getElementById('f-quad').value=t.quadrant;
   document.getElementById('f-memo').value=t.taskMemo||'';
   document.getElementById('del-btn').style.display='inline-flex';
-  clearErr();renderActions(t.actions);
+  clearErr();
+  if(CURRENT_WORKSPACE.type==='group'&&CURRENT_WORKSPACE.groupId){
+    loadGroupMembersIfNeeded(CURRENT_WORKSPACE.groupId,function(members){
+      _setupAssigneeField(members,t.assigneeUid||null,t.owner||'');
+      renderActions(t.actions,members);
+    });
+  } else {
+    _setupAssigneeField([],null,'');
+    renderActions(t.actions,[]);
+  }
   document.getElementById('overlay').classList.add('open');
   setTimeout(function(){document.getElementById('f-title').focus();},60);
 }
@@ -1264,36 +1444,69 @@ function closeModal(){document.getElementById('overlay').classList.remove('open'
 function clearErr(){['f-title','f-owner','f-due'].forEach(function(id){document.getElementById(id).classList.remove('err');});}
 function saveModal(){
   var title=document.getElementById('f-title').value.trim();
-  var owner=document.getElementById('f-owner').value.trim();
   var due=document.getElementById('f-due').value;
   var q=document.getElementById('f-quad').value;
   var ok=true;
   if(!title){document.getElementById('f-title').classList.add('err');ok=false;}else document.getElementById('f-title').classList.remove('err');
-  if(!owner){document.getElementById('f-owner').classList.add('err');ok=false;}else document.getElementById('f-owner').classList.remove('err');
+
+  // 担当者：グループ=セレクト、個人=テキスト
+  var owner='',assigneeUid=null;
+  var isGroup=CURRENT_WORKSPACE.type==='group';
+  if(isGroup){
+    var sel=document.getElementById('f-assignee');
+    assigneeUid=sel.value||null;
+    if(assigneeUid){
+      // 選択されたメンバーのdisplayNameをownerに
+      var gid=CURRENT_WORKSPACE.groupId;
+      var members=GROUP_MEMBERS_CACHE[gid]||[];
+      var m=members.find(function(x){return x.uid===assigneeUid;});
+      owner=m?(m.displayName||''):'';
+    }
+    document.getElementById('f-owner').classList.remove('err');
+  } else {
+    owner=document.getElementById('f-owner').value.trim();
+    if(!owner){document.getElementById('f-owner').classList.add('err');ok=false;}else document.getElementById('f-owner').classList.remove('err');
+  }
   if(!due){document.getElementById('f-due').classList.add('err');ok=false;}else document.getElementById('f-due').classList.remove('err');
   if(!ok){showToast('⚠ 必須項目を入力してください');return;}
+
   var memo=(document.getElementById('f-memo').value||'').trim();
   var actions=collectActions();
-  if(EDITING_ID){STATE.updateTask(EDITING_ID,{title:title,owner:owner,dueDate:due,quadrant:q,actions:actions,taskMemo:memo});showToast('保存しました ✓');}
-  else{STATE.addTask({title:title,owner:owner,dueDate:due,quadrant:q,actions:actions,taskMemo:memo});showToast('タスクを追加しました ✓');}
+  var taskData={title:title,owner:owner,assigneeUid:assigneeUid,dueDate:due,quadrant:q,actions:actions,taskMemo:memo};
+  if(EDITING_ID){STATE.updateTask(EDITING_ID,taskData);showToast('保存しました ✓');}
+  else{STATE.addTask(taskData);showToast('タスクを追加しました ✓');}
   renderMatrix();closeModal();
 }
 
 /* =====================================================
    Actions in modal
 ===================================================== */
-function renderActions(actions){
+function renderActions(actions,members){
   var c=document.getElementById('act-container');c.innerHTML='';
-  if(!actions.length){c.appendChild(makeActRow({id:uid(),actionTitle:'',actionOwner:'',actionDueDate:'',isDone:false}));return;}
-  actions.forEach(function(a){c.appendChild(makeActRow(a));});
+  var m=members||[];
+  if(!actions.length){c.appendChild(makeActRow({id:uid(),actionTitle:'',actionOwner:'',actionDueDate:'',isDone:false},m));return;}
+  actions.forEach(function(a){c.appendChild(makeActRow(a,m));});
 }
-function makeActRow(a){
+function makeActRow(a,members){
   var div=document.createElement('div');div.className='act-item';div.setAttribute('data-aid',a.id||uid());
+  var isGroup=CURRENT_WORKSPACE.type==='group'&&members&&members.length>0;
+  // 担当者フィールド：グループ=セレクト, 個人=テキスト
+  var ownerField;
+  if(isGroup){
+    var opts='<option value="">── 未割り当て ──</option>';
+    members.forEach(function(m){
+      var sel=(m.uid===(a.assigneeUid||''))?'selected':'';
+      opts+='<option value="'+esc(m.uid)+'" '+sel+'>'+(m.displayName||'(名前なし)')+(m.uid===CURRENT_UID?' （あなた）':'')+(m.role==='admin'?' 👑':'')+'</option>';
+    });
+    ownerField='<select class="act-in act-assignee-sel">'+opts+'</select>';
+  } else {
+    ownerField='<input type="text" class="act-in" placeholder="担当者" value="'+esc(a.actionOwner||'')+'"/>';
+  }
   div.innerHTML=
     '<div class="act-row"><input type="checkbox" class="act-chk"'+(a.isDone?' checked':'')+' title="完了"/>'+
     '<input type="text" class="act-in" placeholder="アクション名" value="'+esc(a.actionTitle||'')+'"/>'+
     '<button class="act-rm" title="削除">×</button></div>'+
-    '<div class="act-row"><input type="text" class="act-in" placeholder="担当者" value="'+esc(a.actionOwner||'')+'"/>'+
+    '<div class="act-row">'+ownerField+
     '<input type="date" class="act-in" value="'+(a.actionDueDate||'')+'"/></div>'+
     '<textarea class="act-memo" placeholder="メモ（任意）">'+esc(a.actionMemo||'')+'</textarea>';
   div.querySelector('.act-rm').addEventListener('click',function(){div.remove();});
@@ -1301,11 +1514,38 @@ function makeActRow(a){
 }
 function collectActions(){
   var res=[];
+  var isGroup=CURRENT_WORKSPACE.type==='group';
+  var gid=CURRENT_WORKSPACE.groupId;
+  var members=(isGroup&&gid)?GROUP_MEMBERS_CACHE[gid]||[]:[];
   document.querySelectorAll('#act-container .act-item').forEach(function(item){
-    var ins=item.querySelectorAll('input');
-    var title=(ins[1].value||'').trim();if(!title)return;
+    var titleIn=item.querySelectorAll('input.act-in')[0];
+    var dateIn=item.querySelector('input[type="date"].act-in');
+    var title=(titleIn?titleIn.value:'').trim();if(!title)return;
+    var chk=item.querySelector('.act-chk');
     var memoEl=item.querySelector('.act-memo');
-    res.push({id:item.getAttribute('data-aid')||uid(),actionTitle:title,actionOwner:(ins[2].value||'').trim(),actionDueDate:ins[3].value||'',isDone:ins[0].checked,actionMemo:memoEl?(memoEl.value||'').trim():''});
+    var actionOwner='',assigneeUid=null;
+    var selEl=item.querySelector('.act-assignee-sel');
+    if(isGroup&&selEl){
+      assigneeUid=selEl.value||null;
+      if(assigneeUid){
+        var m=members.find(function(x){return x.uid===assigneeUid;});
+        actionOwner=m?(m.displayName||''):'';
+      }
+    } else {
+      var ownerIn=item.querySelector('input.act-in:nth-of-type(2)');
+      // テキスト担当者: 2番目のinput（チェックボックス除く）
+      var allIns=item.querySelectorAll('input.act-in');
+      if(allIns[1])actionOwner=(allIns[1].value||'').trim();
+    }
+    res.push({
+      id:item.getAttribute('data-aid')||uid(),
+      actionTitle:title,
+      actionOwner:actionOwner,
+      assigneeUid:assigneeUid,
+      actionDueDate:dateIn?dateIn.value:'',
+      isDone:chk?chk.checked:false,
+      actionMemo:memoEl?(memoEl.value||'').trim():''
+    });
   });
   return res;
 }
@@ -1525,8 +1765,9 @@ function switchWorkspace(type,groupId){
   var token=++_wsToken; // このswitchのトークン
   console.log('[WS] switch →',type,groupId||'personal','token=',token);
 
-  // 1. 既存SSE接続を全て閉じる
+  // 1. 既存SSE接続を全て閉じる（グループウォッチャーも停止）
   Object.keys(_esMap).forEach(function(k){try{_esMap[k].close();}catch(e){}delete _esMap[k];});
+  stopGroupWatchers();
 
   // 2. ワークスペースを更新
   CURRENT_WORKSPACE={type:type,groupId:groupId||null};
@@ -1608,6 +1849,9 @@ function switchWorkspace(type,groupId){
     (USER_GROUPS.find(function(g){return g.id===groupId;})||{name:'グループ'}).name:
     '個人';
   showToast(wsName+' に切り替えました');
+
+  // Phase 4: 個人ワークスペースに戻った時、全グループのリアルタイム監視を再開
+  if(type==='personal') startGroupWatchers();
 }
 
 /* グループ作成モーダル */
@@ -1741,6 +1985,30 @@ function joinGroup(groupId,groupName){
       showToast('「'+groupName+'」に参加しました ✓');
       switchWorkspace('group',groupId);
     }).catch(function(){showToast('参加に失敗しました。もう一度お試しください。');});
+  });
+}
+
+/* =====================================================
+   Phase 4: グループメンバーキャッシュ
+===================================================== */
+/* グループメンバーを読み込んでキャッシュする（担当者ドロップダウン用） */
+function loadGroupMembersIfNeeded(groupId,cb){
+  if(GROUP_MEMBERS_CACHE[groupId]){cb(GROUP_MEMBERS_CACHE[groupId]);return;}
+  _refreshToken().then(function(t){
+    var url=FB+'/groups/'+groupId+'/members.json'+(t?'?auth='+t:'');
+    fetch(url).then(function(r){return r.ok?r.json():null;}).then(function(d){
+      var members=[];
+      if(d&&typeof d==='object'){
+        members=Object.keys(d).map(function(u){return Object.assign({uid:u},d[u]);});
+        members.sort(function(a,b){
+          if(a.role==='admin'&&b.role!=='admin')return -1;
+          if(b.role==='admin'&&a.role!=='admin')return 1;
+          return 0;
+        });
+      }
+      GROUP_MEMBERS_CACHE[groupId]=members;
+      cb(members);
+    }).catch(function(){cb([]);});
   });
 }
 
@@ -2005,6 +2273,8 @@ function initApp(){
   // グループメンバーシップをロードしてタブを再描画
   loadUserGroups(function(){
     renderTabs();
+    // Phase 4: 個人ワークスペースなら全グループを監視開始
+    if(CURRENT_WORKSPACE.type==='personal') startGroupWatchers();
     // 招待リンクがある場合は処理
     if(_pendingInviteToken){
       var token=_pendingInviteToken;
