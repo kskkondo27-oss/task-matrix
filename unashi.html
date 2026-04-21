@@ -337,6 +337,14 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
 }
 .ws-tab:hover .ws-invite-btn{opacity:1}
 .ws-invite-btn:hover{background:rgba(99,102,241,.18)!important}
+/* タブ並び替えボタン（③） */
+.ws-tab-move{
+  font-size:10px;padding:0 4px;border-radius:3px;line-height:1.6;flex-shrink:0;
+  opacity:0;transition:opacity .15s,background .15s;cursor:pointer;
+  color:var(--text-muted);
+}
+.ws-tab:hover .ws-tab-move{opacity:.7}
+.ws-tab-move:hover{opacity:1!important;background:rgba(99,102,241,.18)}
 
 /* =====================================================
    グループ関連モーダル
@@ -696,6 +704,7 @@ var USER_GROUPS=[];           // [{id,name,role,joinedAt}]
 var GROUP_DATA_CACHE={};      // Phase 4: {groupId: data} グループタスクキャッシュ（個人ビュー用）
 var _grpWatchers={};          // Phase 4: {groupId: EventSource}
 var GROUP_MEMBERS_CACHE={};   // Phase 4: {groupId: [{uid,displayName,role,...}]}
+var _wsOrder={};              // ③ グループタブ並び順 {groupId: 0/1/2...} ユーザーごとに保存
 var _pendingInviteToken=null;
 var _currentInviteGroupId=null;
 var _wsToken=0; // ワークスペース切替のたびにインクリメント（非同期コールバックの無効化用）
@@ -750,6 +759,40 @@ function fbWatch(k,cb){
     });
   }
   connect();
+}
+
+/* =====================================================
+   ③ グループタブ並び替え（ユーザーごとにlocalStorageへ保存）
+===================================================== */
+function _wsOrderKey(){return 'tm-ws-order-'+(CURRENT_UID||'anon');}
+function loadWsOrder(){
+  try{var s=localStorage.getItem(_wsOrderKey());_wsOrder=s?JSON.parse(s):{};}
+  catch(e){_wsOrder={};}
+}
+function saveWsOrder(){
+  try{localStorage.setItem(_wsOrderKey(),JSON.stringify(_wsOrder));}catch(e){}
+}
+/* USER_GROUPS を _wsOrder に従ってソートした配列を返す */
+function getSortedGroups(){
+  return USER_GROUPS.slice().sort(function(a,b){
+    var oa=(_wsOrder[a.id]!==undefined)?_wsOrder[a.id]:999;
+    var ob=(_wsOrder[b.id]!==undefined)?_wsOrder[b.id]:999;
+    if(oa!==ob)return oa-ob;
+    return(a.joinedAt||'')>(b.joinedAt||'')?1:-1;
+  });
+}
+/* グループタブを左右に移動 dir: -1=左 +1=右 */
+function moveGroupTab(groupId,dir){
+  var sorted=getSortedGroups();
+  var idx=sorted.findIndex?sorted.findIndex(function(g){return g.id===groupId;}):
+    (function(){for(var i=0;i<sorted.length;i++)if(sorted[i].id===groupId)return i;return -1;})();
+  if(idx<0)return;
+  var newIdx=idx+dir;
+  if(newIdx<0||newIdx>=sorted.length)return;
+  var tmp=sorted[idx];sorted[idx]=sorted[newIdx];sorted[newIdx]=tmp;
+  sorted.forEach(function(g,i){_wsOrder[g.id]=i;});
+  saveWsOrder();
+  renderTabs();
 }
 
 /* =====================================================
@@ -958,22 +1001,32 @@ var STATE={
     if(!this.tabs.find(function(t){return t.id===STATE.activeTabId;})){
       this.activeTabId=this.tabs[0].id;
     }
-    // Firebaseから最新データを取得（タスク数が多い方を優先）
+    // ④ Firebaseから最新データを取得
+    // 安全方針: Firebase が null（ネットワークエラー等）の場合は絶対に上書きしない
     var self=this,localN=this.tasks.length,loadToken=_wsToken;
     var snap={version:3,tabs:this.tabs,tasks:this.tasks,activeTabId:this.activeTabId};
     fbLoad('data').then(function(d){
-      // ワークスペースが切り替わっていたらこのコールバックは無効
       if(loadToken!==_wsToken)return;
+      if(d===null){
+        // ネットワーク障害・認証エラー → 既存データを保護するため何もしない
+        console.warn('[STATE.load] Firebase returned null - skipping save to prevent data loss');
+        return;
+      }
       var fbN=(d&&d.tasks)?d.tasks.length:0;
-      if(d&&d.tabs&&fbN>localN){
+      if(d&&d.tabs&&d.tabs.length){
+        // Firebase にデータあり → Firebase を正として採用（>=でタスク数が同じでも受け入れる）
         _fl=true;self.tabs=d.tabs;self.tasks=self._normalize(d.tasks);
         if(!self.tabs.find(function(t){return t.id===self.activeTabId;})){
           self.activeTabId=d.activeTabId||self.tabs[0].id;
         }
         try{localStorage.setItem(self.DKEY,JSON.stringify(d));}catch(e){}
-        _fl=false;renderTabs();renderMatrix();showToast('クラウドから同期しました ✓');
+        _fl=false;
+        if(fbN!==localN){renderTabs();renderMatrix();showToast('クラウドから同期しました ✓');}
       } else {
-        fbSave('data',snap);
+        // Firebase が空（新規ワークスペース）かつローカルにデータがある → Firebase へ書き込む
+        if(snap.tabs.length&&(snap.tasks.length>0||localN===0)){
+          fbSave('data',snap);
+        }
       }
     });
   },
@@ -1125,8 +1178,9 @@ function renderTabs(){
   pTab.innerHTML='<span class="ws-tab-icon">👤</span><span>個人</span>';
   bar.appendChild(pTab);
 
-  // グループタブ（各グループ）— クリックはイベント委譲で処理
-  USER_GROUPS.forEach(function(grp){
+  // グループタブ（並び順を適用）— クリックはイベント委譲で処理
+  var sortedGroups=getSortedGroups();
+  sortedGroups.forEach(function(grp,idx){
     var isActive=CURRENT_WORKSPACE.type==='group'&&CURRENT_WORKSPACE.groupId===grp.id;
     var gTab=document.createElement('div');
     gTab.className='ws-tab'+(isActive?' ws-active':'');
@@ -1137,6 +1191,23 @@ function renderTabs(){
     var icon=document.createElement('span');icon.className='ws-tab-icon';icon.textContent='👥';
     var nameEl=document.createElement('span');nameEl.className='tab-name-span';nameEl.textContent=grp.name;
     gTab.appendChild(icon);gTab.appendChild(nameEl);
+
+    // ← 左移動ボタン（先頭以外）
+    if(idx>0){
+      var moveL=document.createElement('span');
+      moveL.className='ws-tab-move';moveL.title='左へ移動';moveL.textContent='←';
+      moveL.setAttribute('data-tab-move-group',grp.id);
+      moveL.setAttribute('data-tab-move-dir','-1');
+      gTab.appendChild(moveL);
+    }
+    // → 右移動ボタン（末尾以外）
+    if(idx<sortedGroups.length-1){
+      var moveR=document.createElement('span');
+      moveR.className='ws-tab-move';moveR.title='右へ移動';moveR.textContent='→';
+      moveR.setAttribute('data-tab-move-group',grp.id);
+      moveR.setAttribute('data-tab-move-dir','1');
+      gTab.appendChild(moveR);
+    }
 
     // ⚙️ 設定ボタン — data属性のみ、クリックはイベント委譲で処理
     var settBtn=document.createElement('span');
@@ -1192,6 +1263,16 @@ function renderTabs(){
 function setupTabBarEvents(){
   var bar=document.getElementById('tab-bar');
   bar.addEventListener('click',function(e){
+    // ③ タブ並び替えボタン（data-tab-move-group）を最優先チェック
+    var moveEl=e.target.closest('[data-tab-move-group]');
+    if(moveEl){
+      moveGroupTab(
+        moveEl.getAttribute('data-tab-move-group'),
+        parseInt(moveEl.getAttribute('data-tab-move-dir'),10)
+      );
+      return;
+    }
+
     // ① 設定ボタン（data-settings-group）を最優先チェック
     var settEl=e.target.closest('[data-settings-group]');
     if(settEl){
@@ -1457,6 +1538,9 @@ function openAdd(q){
   document.getElementById('del-btn').style.display='none';
   clearErr();
   if(CURRENT_WORKSPACE.type==='group'&&CURRENT_WORKSPACE.groupId){
+    // モーダルを開くたびにキャッシュを破棄して最新メンバーを取得
+    // ② BGM事業部のオーナーしか選べない不具合の根本修正
+    delete GROUP_MEMBERS_CACHE[CURRENT_WORKSPACE.groupId];
     loadGroupMembersIfNeeded(CURRENT_WORKSPACE.groupId,function(members){
       _setupAssigneeField(members,null,'');
       renderActions([],members);
@@ -1474,12 +1558,14 @@ function openEdit(id){
   EDITING_ID=id;
   syncQuadOptions();
   document.getElementById('modal-ttl').textContent='タスクを編集';
-  document.getElementById('f-title').value=t.title;document.getElementById('f-owner').value=t.owner;
+  document.getElementById('f-title').value=t.title;document.getElementById('f-owner').value=t.owner||'';
   document.getElementById('f-due').value=t.dueDate;document.getElementById('f-quad').value=t.quadrant;
   document.getElementById('f-memo').value=t.taskMemo||'';
   document.getElementById('del-btn').style.display='inline-flex';
   clearErr();
   if(CURRENT_WORKSPACE.type==='group'&&CURRENT_WORKSPACE.groupId){
+    // 毎回強制リフレッシュ
+    delete GROUP_MEMBERS_CACHE[CURRENT_WORKSPACE.groupId];
     loadGroupMembersIfNeeded(CURRENT_WORKSPACE.groupId,function(members){
       _setupAssigneeField(members,t.assigneeUid||null,t.owner||'');
       renderActions(t.actions,members);
@@ -1800,20 +1886,42 @@ function _onDataSync(d){
    グループ管理
 ===================================================== */
 
-/* グループメンバーシップをロード */
+/* グループメンバーシップをロード
+   ① /users/{uid}/groupMemberships でグループIDとロールを取得
+   ② /groups/{gid}/info から権威ある名前を取得（リネーム後も全メンバーに反映）
+   Firebaseルール上、オーナーは他メンバーのgroupNameを書き換えできないため
+   読み取り側でgroup/infoを参照することで名前の一貫性を保証する */
 function loadUserGroups(cb){
   _refreshToken().then(function(){
     var url=FB+'/users/'+CURRENT_UID+'/groupMemberships.json';
     if(_authToken)url+='?auth='+_authToken;
     fetch(url).then(function(r){return r.ok?r.json():null;}).then(function(d){
-      if(d&&typeof d==='object'){
-        USER_GROUPS=Object.keys(d).map(function(gid){
+      if(!d||typeof d!=='object'){USER_GROUPS=[];if(cb)cb();return;}
+      var gids=Object.keys(d);
+      if(!gids.length){USER_GROUPS=[];if(cb)cb();return;}
+      // 各グループのinfo（権威ある名前）を並行取得
+      Promise.all(gids.map(function(gid){
+        return _refreshToken().then(function(t){
+          var u=FB+'/groups/'+gid+'/info.json'+(t?'?auth='+t:'');
+          return fetch(u).then(function(r){return r.ok?r.json():null;}).catch(function(){return null;});
+        });
+      })).then(function(infos){
+        USER_GROUPS=gids.map(function(gid,i){
           var m=d[gid];
-          // Firebase保存時は groupName、コード内は name で統一
+          var info=infos[i];
+          // group/info.name を優先（オーナーのリネームが全員に反映される）
+          var name=(info&&info.name)||(m.groupName||m.name||'(名前なし)');
+          return {id:gid,name:name,role:m.role||'member',joinedAt:m.joinedAt||''};
+        });
+        if(cb)cb();
+      }).catch(function(){
+        // infoフェッチ失敗時はmembership名で続行（フォールバック）
+        USER_GROUPS=gids.map(function(gid){
+          var m=d[gid];
           return {id:gid,name:m.groupName||m.name||'(名前なし)',role:m.role||'member',joinedAt:m.joinedAt||''};
         });
-      } else {USER_GROUPS=[];}
-      if(cb)cb();
+        if(cb)cb();
+      });
     }).catch(function(){USER_GROUPS=[];if(cb)cb();});
   });
 }
@@ -1872,25 +1980,32 @@ function switchWorkspace(type,groupId){
   // 6. localStorageデータで即時描画
   renderTabs();renderMatrix();
 
-  // 7. Firebaseから非同期ロード（token チェックで競合を防ぐ）
+  // 7. ④ Firebaseから非同期ロード（token チェック＋null 安全ガード）
   var snapN=STATE.tasks.length;
   fbLoad('data').then(function(d){
     if(token!==_wsToken){console.log('[WS] stale callback, skip token=',token);return;}
     console.log('[WS] firebase:',d?'OK tasks='+(d.tasks||[]).length:'null');
+    if(d===null){
+      // ④ ネットワーク障害・認証失敗 → 既存データ保護のため一切書き込まない
+      console.warn('[WS] Firebase returned null - skipping save to prevent data loss');
+      return;
+    }
     if(d&&d.tabs&&d.tabs.length){
-      if((d.tasks||[]).length>=snapN){
-        STATE.tabs=d.tabs;STATE.tasks=STATE._normalize(d.tasks);
-        if(!STATE.tabs.find(function(t){return t.id===STATE.activeTabId;})){
-          STATE.activeTabId=d.activeTabId||STATE.tabs[0].id;
-        }
-        try{localStorage.setItem(STATE.DKEY,JSON.stringify(d));}catch(e){}
-        renderTabs();renderMatrix();
+      // Firebase にデータあり → 採用（同数・増減問わず Firebase を正とする）
+      STATE.tabs=d.tabs;STATE.tasks=STATE._normalize(d.tasks);
+      if(!STATE.tabs.find(function(t){return t.id===STATE.activeTabId;})){
+        STATE.activeTabId=d.activeTabId||STATE.tabs[0].id;
       }
+      try{localStorage.setItem(STATE.DKEY,JSON.stringify(d));}catch(e){}
+      renderTabs();renderMatrix();
     } else {
-      // Firebaseにデータなし → 現在のstateを初期保存
-      var saveSnap={version:3,tabs:STATE.tabs,tasks:STATE.tasks,activeTabId:STATE.activeTabId};
-      fbSave('data',saveSnap);
-      try{localStorage.setItem(STATE.DKEY,JSON.stringify(saveSnap));}catch(e){}
+      // Firebaseが空（新規グループ）→ ローカルに既存データがなければ初期保存
+      if(snapN===0){
+        var saveSnap={version:3,tabs:STATE.tabs,tasks:STATE.tasks,activeTabId:STATE.activeTabId};
+        fbSave('data',saveSnap);
+        try{localStorage.setItem(STATE.DKEY,JSON.stringify(saveSnap));}catch(e){}
+      }
+      // snapN>0（ローカルにデータあり）の場合は何もしない → Firebaseへの誤上書きを防ぐ
     }
   });
 
@@ -2382,6 +2497,7 @@ function initApp(){
   if(_appInited)return; _appInited=true;
 
   STATE.load();
+  loadWsOrder(); // ③ タブ並び順をlocalStorageから復元
   fbWatch('data',_onDataSync);
   setupTabBarEvents(); // タブバーのイベント委譲を一度だけ登録
   renderTabs();renderMatrix();setupDropZones();initLabels();initAxis();
