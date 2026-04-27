@@ -925,13 +925,17 @@ function dateStatus(iso){
   var diff=Math.round((d-now)/86400000);
   return diff<0?'late':diff<=2?'soon':'';
 }
-/* 期日アラートクラス（当日→alert-today, 前日→alert-tomorrow） */
+/* 期日アラートクラス
+   diff<=0（当日・超過）→ alert-today（赤）
+   diff===1（前日）    → alert-tomorrow（黄）
+   その他             → ''（通常）
+   完了済みは呼び出し側で除外（isCompleted チェック済み） */
 function alertStatus(iso){
   if(!iso)return'';
   var d=new Date(iso+'T00:00:00'),now=new Date();now.setHours(0,0,0,0);
   var diff=Math.round((d-now)/86400000);
-  if(diff===0)return'alert-today';
-  if(diff===1)return'alert-tomorrow';
+  if(diff<=0)return'alert-today';   // 当日・期日超過 → 赤
+  if(diff===1)return'alert-tomorrow'; // 前日 → 黄
   return'';
 }
 function deepClone(obj){return JSON.parse(JSON.stringify(obj));}
