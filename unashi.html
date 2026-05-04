@@ -3052,7 +3052,6 @@ document.addEventListener('DOMContentLoaded',function(){
       CURRENT_UID=user.uid;
       _isFirstLoad=false; // ログイン毎にリセット
       _autoRestoreAttempted=false; // ログイン毎にリセット（新しいセッションで復元を再試行）
-      _appInited=false; // ログイン毎にinitAppを再実行可能にする
       _refreshToken().then(function(token){
         console.log('[AUTH] Token refresh:', token?'SUCCESS ('+token.substring(0,20)+'...)':'FAILED (null)');
         if(!token){
@@ -3066,6 +3065,9 @@ document.addEventListener('DOMContentLoaded',function(){
       });
     } else {
       console.log('[AUTH] 未ログイン状態 → ログイン画面を表示');
+      // ログアウト時にフラグをリセット（次のログインで initApp を再実行可能にする）
+      _appInited=false;
+      _autoRestoreAttempted=false;
       document.getElementById('auth-screen').style.display='flex';
     }
   });
