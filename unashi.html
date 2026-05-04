@@ -3015,12 +3015,22 @@ document.addEventListener('DOMContentLoaded',function(){
   // 招待パラメータを事前チェック（認証前に保持）
   checkInviteParam();
 
-  // ログインボタン（★ prompt:select_account でアカウント選択を強制）
+  // ★ リダイレクト後の認証結果を処理（signInWithRedirect 方式）
+  _fbAuth.getRedirectResult().then(function(result){
+    if(result&&result.user){
+      console.log('[AUTH] getRedirectResult: logged in as', result.user.email);
+    }
+  }).catch(function(err){
+    console.error('[AUTH] getRedirectResult error:', err.code, err.message);
+    document.getElementById('auth-err').textContent='ログインに失敗しました（'+err.code+'）。もう一度お試しください。';
+  });
+
+  // ログインボタン（★ Redirect方式でポップアップブロック・ストレージ制限を回避）
   document.getElementById('google-login-btn').addEventListener('click',function(){
     document.getElementById('auth-err').textContent='';
-    _fbAuth.signInWithPopup(_gProvider).catch(function(err){
-      document.getElementById('auth-err').textContent='ログインに失敗しました。もう一度お試しください。';
-      console.error('[AUTH] signInWithPopup error:', err);
+    _fbAuth.signInWithRedirect(_gProvider).catch(function(err){
+      document.getElementById('auth-err').textContent='ログインに失敗しました（'+err.code+'）。もう一度お試しください。';
+      console.error('[AUTH] signInWithRedirect error:', err.code, err.message);
     });
   });
   // ログアウトボタン
