@@ -305,9 +305,13 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
 /* ユーザー情報（ヘッダー） */
 .user-info{display:none;align-items:center;gap:8px}
 .user-avatar{width:28px;height:28px;border-radius:50%;object-fit:cover;border:2px solid var(--card-border);flex-shrink:0}
-.user-name-txt{font-size:12px;font-weight:600;color:var(--text-sub);max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.user-name-wrap{display:flex;flex-direction:column;max-width:130px}
+.user-name-txt{font-size:12px;font-weight:600;color:var(--text-sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.user-email-txt{font-size:10px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .logout-btn{font-size:11px;color:var(--text-muted);background:transparent;border:1px solid var(--card-border);border-radius:6px;padding:4px 9px;cursor:pointer;font-family:inherit;transition:all .15s;white-space:nowrap}
 .logout-btn:hover{background:#fee2e2;border-color:#dc2626;color:#dc2626}
+.switch-account-btn{font-size:11px;color:#4f46e5;background:transparent;border:1px solid #c7d2fe;border-radius:6px;padding:4px 9px;cursor:pointer;font-family:inherit;transition:all .15s;white-space:nowrap}
+.switch-account-btn:hover{background:#eef2ff;border-color:#6366f1}
 
 /* =====================================================
    ワークスペースタブ（タブバー左端の固定タブ）
@@ -430,7 +434,11 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
     <button class="btn btn-primary" id="header-add-btn">＋&nbsp;追加</button>
     <div class="user-info" id="user-info">
       <img class="user-avatar" id="user-avatar" src="" alt=""/>
-      <span class="user-name-txt" id="user-name"></span>
+      <div class="user-name-wrap">
+        <span class="user-name-txt" id="user-name"></span>
+        <span class="user-email-txt" id="user-email"></span>
+      </div>
+      <button class="switch-account-btn" id="switch-account-btn">アカウント切替</button>
       <button class="logout-btn" id="logout-btn">ログアウト</button>
     </div>
   </div>
@@ -686,6 +694,8 @@ var FIREBASE_CONFIG={
 firebase.initializeApp(FIREBASE_CONFIG);
 var _fbAuth=firebase.auth();
 var _gProvider=new firebase.auth.GoogleAuthProvider();
+// ★ 毎回アカウント選択画面を強制表示（誤アカウント自動ログイン防止）
+_gProvider.setCustomParameters({'prompt':'select_account'});
 
 /* =====================================================
    Firebase クラウド同期（認証対応）
@@ -695,6 +705,7 @@ var _fl=false;
 var CURRENT_UID=null;
 var _authToken=null;
 var _esMap={};
+var _isFirstLoad=false; // 初回ロード（新規ユーザー）フラグ
 
 /* =====================================================
    ワークスペース管理
@@ -1012,24 +1023,38 @@ var STATE={
     fbLoad('data').then(function(d){
       if(loadToken!==_wsToken)return;
       if(d===null){
-        // ネットワーク障害・認証エラー → 既存データを保護するため何もしない
-        console.warn('[STATE.load] Firebase returned null - skipping save to prevent data loss');
+        // ★ ネットワーク障害・認証エラー → データ保護のため何もしない＋警告表示
+        console.warn('[STATE.load] Firebase returned null（認証エラーまたはネットワーク障害）- save skipped');
+        showToast('⚠ データの読み込みに失敗しました。再読み込みしてください。');
         return;
       }
-      var fbN=(d&&d.tasks)?d.tasks.length:0;
+      console.log('[STATE.load] Firebase response: tabs='+(d&&d.tabs?d.tabs.length:'none')+' tasks='+(d&&d.tasks?d.tasks.length:'none'));
       if(d&&d.tabs&&d.tabs.length){
-        // Firebase にデータあり → Firebase を正として採用（>=でタスク数が同じでも受け入れる）
+        // Firebase にデータあり → Firebase を正として採用（タスク数に関わらず必ず適用）
         _fl=true;self.tabs=d.tabs;self.tasks=self._normalize(d.tasks);
         if(!self.tabs.find(function(t){return t.id===self.activeTabId;})){
           self.activeTabId=d.activeTabId||self.tabs[0].id;
         }
         try{localStorage.setItem(self.DKEY,JSON.stringify(d));}catch(e){}
         _fl=false;
-        if(fbN!==localN){renderTabs();renderMatrix();showToast('クラウドから同期しました ✓');}
+        // ★ タスク数に関わらず常にUIを更新（fbN===localN でもレンダリング）
+        renderTabs();renderMatrix();
+        var fbN=(d.tasks||[]).length;
+        if(fbN!==localN)showToast('クラウドから同期しました ✓');
       } else {
-        // Firebase が空（新規ワークスペース）かつローカルにデータがある → Firebase へ書き込む
-        if(snap.tabs.length&&(snap.tasks.length>0||localN===0)){
+        // Firebase が空 → ★ タスクが実際にある場合のみ Firebase へ書き込む（空データの誤上書きを防止）
+        console.log('[STATE.load] Firebase empty for this UID (new workspace or data not found)');
+        if(snap.tasks.length>0){
+          // ローカルにタスクがある → Firebase へ書き込む
           fbSave('data',snap);
+          console.log('[STATE.load] Saved local data to Firebase: tasks='+snap.tasks.length);
+        } else {
+          // ローカルも Firebase も空 → 初回アクセス時のみ空タブを Firebase に記録
+          // ★ ただし既存セッションで誤ってここに来た場合を防ぐため、initialLoad フラグで制御
+          if(_isFirstLoad){
+            fbSave('data',snap);
+            console.log('[STATE.load] First load - saved empty workspace to Firebase');
+          }
         }
       }
     });
@@ -1899,9 +1924,17 @@ function loadUserGroups(cb){
   _refreshToken().then(function(){
     var url=FB+'/users/'+CURRENT_UID+'/groupMemberships.json';
     if(_authToken)url+='?auth='+_authToken;
-    fetch(url).then(function(r){return r.ok?r.json():null;}).then(function(d){
-      if(!d||typeof d!=='object'){USER_GROUPS=[];if(cb)cb();return;}
+    fetch(url).then(function(r){
+      console.log('[GROUPS] groupMemberships fetch status:', r.status, r.ok?'OK':'NG');
+      return r.ok?r.json():null;
+    }).then(function(d){
+      console.log('[GROUPS] groupMemberships data:', d?JSON.stringify(d):'null');
+      if(!d||typeof d!=='object'){
+        console.log('[GROUPS] No memberships found (d='+JSON.stringify(d)+')');
+        USER_GROUPS=[];if(cb)cb();return;
+      }
       var gids=Object.keys(d);
+      console.log('[GROUPS] Found '+gids.length+' group(s):', gids);
       if(!gids.length){USER_GROUPS=[];if(cb)cb();return;}
       // 各グループのinfo（権威ある名前）を並行取得
       Promise.all(gids.map(function(gid){
@@ -1996,6 +2029,7 @@ function switchWorkspace(type,groupId){
     }
     if(d&&d.tabs&&d.tabs.length){
       // Firebase にデータあり → 採用（同数・増減問わず Firebase を正とする）
+      console.log('[WS] Firebase data loaded: tabs='+d.tabs.length+' tasks='+(d.tasks||[]).length);
       STATE.tabs=d.tabs;STATE.tasks=STATE._normalize(d.tasks);
       if(!STATE.tabs.find(function(t){return t.id===STATE.activeTabId;})){
         STATE.activeTabId=d.activeTabId||STATE.tabs[0].id;
@@ -2003,13 +2037,22 @@ function switchWorkspace(type,groupId){
       try{localStorage.setItem(STATE.DKEY,JSON.stringify(d));}catch(e){}
       renderTabs();renderMatrix();
     } else {
-      // Firebaseが空（新規グループ）→ ローカルに既存データがなければ初期保存
-      if(snapN===0){
+      // Firebaseが空 → ★ タスクが実際にある場合のみ保存（空データの誤上書きを防止）
+      console.log('[WS] Firebase empty for this workspace. snapN='+snapN);
+      if(snapN>0){
+        // ローカルにタスクがある → Firebase へ書き込む
         var saveSnap={version:3,tabs:STATE.tabs,tasks:STATE.tasks,activeTabId:STATE.activeTabId};
         fbSave('data',saveSnap);
         try{localStorage.setItem(STATE.DKEY,JSON.stringify(saveSnap));}catch(e){}
+        console.log('[WS] Saved local tasks to Firebase: '+snapN);
+      } else if(type==='group'){
+        // 新規グループ（タスクなし）→ 空の初期データを Firebase に書き込む（グループのみ）
+        var saveSnap={version:3,tabs:STATE.tabs,tasks:STATE.tasks,activeTabId:STATE.activeTabId};
+        fbSave('data',saveSnap);
+        try{localStorage.setItem(STATE.DKEY,JSON.stringify(saveSnap));}catch(e){}
+        console.log('[WS] New group workspace initialized');
       }
-      // snapN>0（ローカルにデータあり）の場合は何もしない → Firebaseへの誤上書きを防ぐ
+      // 個人ワークスペースでタスクなしの場合は何もしない（個人データを空で上書きしない）
     }
   });
 
@@ -2500,6 +2543,11 @@ var _appInited=false;
 function initApp(){
   if(_appInited)return; _appInited=true;
 
+  console.log('[INIT] initApp() started. CURRENT_UID='+CURRENT_UID);
+  console.log('[INIT] localStorage DKEY='+STATE.DKEY);
+  var lsRaw=localStorage.getItem(STATE.DKEY);
+  console.log('[INIT] localStorage data:', lsRaw?'found ('+lsRaw.length+' chars)':'empty');
+
   STATE.load();
   loadWsOrder(); // ③ タブ並び順をlocalStorageから復元
   fbWatch('data',_onDataSync);
@@ -2512,7 +2560,9 @@ function initApp(){
     var av=document.getElementById('user-avatar');
     if(av&&u.photoURL){av.src=u.photoURL;}
     var nm=document.getElementById('user-name');
-    if(nm)nm.textContent=u.displayName||u.email||'';
+    if(nm)nm.textContent=u.displayName||'';
+    var em=document.getElementById('user-email');
+    if(em)em.textContent=u.email||'';
     document.getElementById('user-info').style.display='flex';
     var wb=document.getElementById('ws-badge');if(wb)wb.style.display='none';
   }
@@ -2571,8 +2621,19 @@ function initApp(){
 /* 旧データ（/unashi/）を新パスに一回だけ移行 */
 function migrateLegacyData(cb){
   fbLoad('data').then(function(existing){
-    if(existing&&existing.tabs&&existing.tabs.length){cb();return;}
-    // 新パスにデータなし → 旧パスを確認
+    // ★ null = 認証エラーまたはネットワーク障害 → 移行操作を一切行わずに続行
+    if(existing===null){
+      console.warn('[MIGRATE] Firebase returned null (auth error or network failure) - skipping migration entirely');
+      cb();return;
+    }
+    // 新パスにデータあり → 移行不要
+    if(existing&&existing.tabs&&existing.tabs.length){
+      console.log('[MIGRATE] Existing data found (tabs='+existing.tabs.length+'), no migration needed');
+      cb();return;
+    }
+    // 新パスにデータなし（新規ユーザー候補）→ 旧パスを確認
+    console.log('[MIGRATE] No data at current UID path, checking legacy path...');
+    _isFirstLoad=true; // 新規ユーザーの可能性があるためフラグを立てる
     fetch(FB+'/unashi/data.json').then(function(r){return r.ok?r.json():null;}).then(function(old){
       if(old&&old.tabs&&old.tabs.length){
         fbSave('data',old);
@@ -2592,27 +2653,52 @@ document.addEventListener('DOMContentLoaded',function(){
   // 招待パラメータを事前チェック（認証前に保持）
   checkInviteParam();
 
-  // ログインボタン
+  // ログインボタン（★ prompt:select_account でアカウント選択を強制）
   document.getElementById('google-login-btn').addEventListener('click',function(){
     document.getElementById('auth-err').textContent='';
     _fbAuth.signInWithPopup(_gProvider).catch(function(err){
       document.getElementById('auth-err').textContent='ログインに失敗しました。もう一度お試しください。';
-      console.error(err);
+      console.error('[AUTH] signInWithPopup error:', err);
     });
   });
   // ログアウトボタン
   document.getElementById('logout-btn').addEventListener('click',function(){
     _fbAuth.signOut().then(function(){location.reload();});
   });
+  // アカウント切替ボタン（ログアウト→アカウント選択画面→再ログイン）
+  document.getElementById('switch-account-btn').addEventListener('click',function(){
+    _fbAuth.signOut().then(function(){
+      // ログアウト後にすぐログイン画面表示 → onAuthStateChanged(null)でauth-screenが表示される
+      // その後ユーザーが「Googleでログイン」を押すと select_account が発動
+    });
+  });
   // 認証状態を監視
   _fbAuth.onAuthStateChanged(function(user){
     if(user){
+      // ★ 診断用ログ: コンソールでどのアカウントでログインしているか確認できる
+      console.log('========================================');
+      console.log('[AUTH] ログイン確認');
+      console.log('  uid   :', user.uid);
+      console.log('  email :', user.email||'不明');
+      console.log('  name  :', user.displayName||'不明');
+      console.log('  provider:', (user.providerData&&user.providerData[0]&&user.providerData[0].providerId)||'不明');
+      console.log('  Firebase path: /users/'+user.uid+'/data');
+      console.log('========================================');
       CURRENT_UID=user.uid;
-      _refreshToken().then(function(){
+      _isFirstLoad=false; // ログイン毎にリセット
+      _refreshToken().then(function(token){
+        console.log('[AUTH] Token refresh:', token?'SUCCESS ('+token.substring(0,20)+'...)':'FAILED (null)');
+        if(!token){
+          console.error('[AUTH] ★★★ 認証トークンの取得に失敗しました。ログインし直してください。');
+          showToast('⚠ 認証エラー。ログアウトして再度ログインしてください。');
+          document.getElementById('auth-screen').style.display='flex';
+          return;
+        }
         document.getElementById('auth-screen').style.display='none';
         migrateLegacyData(function(){initApp();});
       });
     } else {
+      console.log('[AUTH] 未ログイン状態 → ログイン画面を表示');
       document.getElementById('auth-screen').style.display='flex';
     }
   });
