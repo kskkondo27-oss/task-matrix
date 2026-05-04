@@ -2664,7 +2664,8 @@ function initApp(){
   document.getElementById('gsettings-ov').addEventListener('click',function(e){if(e.target===document.getElementById('gsettings-ov'))closeGroupSettings();});
 }
 
-/* 旧データ（/unashi/）を新パスに一回だけ移行 */
+/* 旧データ（/unashi/）を新パスに一回だけ移行
+   ★ 認証トークン付きで /unashi/ を読む（Firebase ルールで auth != null の読み取りを許可） */
 function migrateLegacyData(cb){
   fbLoad('data').then(function(existing){
     // ★ null = 認証エラーまたはネットワーク障害 → 移行操作を一切行わずに続行
@@ -2677,18 +2678,34 @@ function migrateLegacyData(cb){
       console.log('[MIGRATE] Existing data found (tabs='+existing.tabs.length+'), no migration needed');
       cb();return;
     }
-    // 新パスにデータなし（新規ユーザー候補）→ 旧パスを確認
-    console.log('[MIGRATE] No data at current UID path, checking legacy path...');
-    _isFirstLoad=true; // 新規ユーザーの可能性があるためフラグを立てる
-    fetch(FB+'/unashi/data.json').then(function(r){return r.ok?r.json():null;}).then(function(old){
-      if(old&&old.tabs&&old.tabs.length){
-        fbSave('data',old);
-        fetch(FB+'/unashi/labels.json').then(function(r){return r.ok?r.json():null;}).then(function(oldL){
-          if(oldL)fbSave('labels',oldL);
-          showToast('既存データを移行しました ✓');cb();
-        }).catch(function(){cb();});
-      } else {cb();}
-    }).catch(function(){cb();});
+    // 新パスにデータなし → 旧パス（/unashi/）を認証トークン付きで確認
+    console.log('[MIGRATE] No data at current UID path, checking legacy /unashi/ path with auth...');
+    _isFirstLoad=true;
+    _refreshToken().then(function(t){
+      // ★ 認証トークン付きで読み込む（ルールで auth != null を許可）
+      var oldDataUrl=FB+'/unashi/data.json'+(t?'?auth='+t:'');
+      var oldLabelsUrl=FB+'/unashi/labels.json'+(t?'?auth='+t:'');
+      fetch(oldDataUrl).then(function(r){
+        console.log('[MIGRATE] /unashi/data fetch status:',r.status);
+        return r.ok?r.json():null;
+      }).then(function(old){
+        if(old&&old.tabs&&old.tabs.length){
+          console.log('[MIGRATE] Legacy data found! tabs='+old.tabs.length+' tasks='+(old.tasks||[]).length+' → migrating to current UID');
+          fbSave('data',old);
+          fetch(oldLabelsUrl).then(function(r){return r.ok?r.json():null;}).then(function(oldL){
+            if(oldL)fbSave('labels',oldL);
+            showToast('✅ 既存データを復元しました！');
+            cb();
+          }).catch(function(){cb();});
+        } else {
+          console.log('[MIGRATE] No legacy data found at /unashi/ (status or empty). old='+JSON.stringify(old));
+          cb();
+        }
+      }).catch(function(e){
+        console.warn('[MIGRATE] /unashi/ fetch error:',e);
+        cb();
+      });
+    });
   });
 }
 
