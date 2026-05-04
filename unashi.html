@@ -4,9 +4,10 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>タスク管理マトリクス</title>
-<!-- Firebase Auth SDK (compat v10) -->
+<!-- Firebase SDK (compat v10) -->
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-database-compat.js"></script>
 <style>
 /* =====================================================
    定数
@@ -747,6 +748,7 @@ var FIREBASE_CONFIG={
 };
 firebase.initializeApp(FIREBASE_CONFIG);
 var _fbAuth=firebase.auth();
+var _fbDb=firebase.database(); // Realtime Database SDK（移行・復元用）
 var _gProvider=new firebase.auth.GoogleAuthProvider();
 // ★ 毎回アカウント選択画面を強制表示（誤アカウント自動ログイン防止）
 _gProvider.setCustomParameters({'prompt':'select_account'});
@@ -2726,63 +2728,120 @@ function migrateLegacyData(cb){
 }
 
 /* =====================================================
-   強制データ復元（/unashi/ → 現在のUID）
+   データ復元（旧パス → 現在のUID）
+   ★ 複数パス・SDK/REST両対応・auth有無両対応の徹底実装
 ===================================================== */
-function forceRestoreFromLegacy(){
-  var btn=document.getElementById('restore-btn');
-  if(btn){btn.disabled=true;btn.textContent='復元中...';}
-  _refreshToken().then(function(t){
-    if(!t){showToast('認証エラー。再ログインしてください。');return;}
-    var dataUrl=FB+'/unashi/data.json?auth='+t;
-    var labelsUrl=FB+'/unashi/labels.json?auth='+t;
-    fetch(dataUrl).then(function(r){
-      console.log('[RESTORE] /unashi/data status:',r.status);
-      return r.ok?r.json():null;
-    }).then(function(old){
-      if(!old||!old.tabs||!old.tabs.length){
-        showToast('⚠ 旧データが見つかりませんでした');
-        if(btn){btn.disabled=false;btn.textContent='データを復元する';}
-        return;
-      }
-      console.log('[RESTORE] Found legacy data: tabs='+old.tabs.length+' tasks='+(old.tasks||[]).length);
-      // 現在のUIDのFirebaseパスに書き込む
-      fbSave('data',old);
-      // localStorageも更新
-      try{localStorage.setItem(STATE.DKEY,JSON.stringify(old));}catch(e){}
-      // ラベルも移行
-      fetch(labelsUrl).then(function(r){return r.ok?r.json():null;}).then(function(oldL){
-        if(oldL)fbSave('labels',oldL);
-      }).catch(function(){});
-      showToast('✅ データを復元しました！ページを再読み込みします...');
-      document.getElementById('restore-banner').style.display='none';
-      // STATEを即時更新して再描画
-      STATE.tabs=old.tabs;
-      STATE.tasks=STATE._normalize(old.tasks);
-      STATE.activeTabId=old.activeTabId||old.tabs[0].id;
-      renderTabs();renderMatrix();
-      // 3秒後に完全リロードして確実に反映
-      setTimeout(function(){location.reload();},3000);
-    }).catch(function(e){
-      console.error('[RESTORE] Error:',e);
-      showToast('復元に失敗しました: '+e.message);
-      if(btn){btn.disabled=false;btn.textContent='データを復元する';}
-    });
+
+// 旧データが存在しうるパス（優先順）
+var LEGACY_PATHS=['/unashi/data','/workspace1/data'];
+
+/* Firebase Database SDK で旧パスを読む（最も信頼性が高い） */
+function _readLegacyViaSDK(path){
+  return _fbDb.ref(path).get().then(function(snap){
+    var v=snap.val();
+    console.log('[SDK] read',path,'→',v?'data(tabs='+(v.tabs?v.tabs.length:0)+' tasks='+(v.tasks?v.tasks.length:0)+')':'null');
+    return v;
+  }).catch(function(e){
+    console.warn('[SDK] read',path,'failed:',e.message);
+    return null;
   });
 }
 
-/* 起動時に旧データの存在確認 → バナー表示 */
-function checkLegacyDataBanner(){
-  if(STATE.tasks.length>0)return; // 現在のデータがあれば不要
-  _refreshToken().then(function(t){
-    if(!t)return;
-    fetch(FB+'/unashi/data.json?auth='+t).then(function(r){return r.ok?r.json():null;}).then(function(old){
-      if(old&&old.tabs&&old.tabs.length&&(old.tasks||[]).length>0){
-        console.log('[BANNER] Legacy data found, showing restore banner');
-        var banner=document.getElementById('restore-banner');
-        if(banner)banner.style.display='flex';
-      }
-    }).catch(function(){});
+/* REST API で旧パスを読む（SDKが失敗した場合のフォールバック） */
+function _readLegacyViaREST(path,token){
+  var url=FB+path+'.json'+(token?'?auth='+token:'');
+  return fetch(url).then(function(r){
+    console.log('[REST] read',path,'status:',r.status);
+    return r.ok?r.json():null;
+  }).catch(function(e){
+    console.warn('[REST] read',path,'failed:',e.message);
+    return null;
   });
+}
+
+/* 全手段で旧データを探す */
+function _findLegacyData(){
+  return _refreshToken().then(function(token){
+    // 全パスを SDK + REST(with auth) + REST(no auth) で順に試す
+    var attempts=[];
+    LEGACY_PATHS.forEach(function(path){
+      attempts.push(function(){return _readLegacyViaSDK(path);});
+      attempts.push(function(){return _readLegacyViaREST(path,token);});
+      attempts.push(function(){return _readLegacyViaREST(path,null);});
+    });
+    // 順番に試してデータが見つかったら即返す
+    return attempts.reduce(function(chain,fn){
+      return chain.then(function(found){
+        if(found&&found.tabs&&found.tabs.length)return found; // 見つかった
+        return fn();
+      });
+    },Promise.resolve(null));
+  });
+}
+
+/* データ復元を実行（ボタンから呼ばれる） */
+function forceRestoreFromLegacy(){
+  var btn=document.getElementById('restore-btn');
+  if(btn){btn.disabled=true;btn.textContent='復元中...';}
+  console.log('[RESTORE] Starting restoration for UID:',CURRENT_UID);
+
+  _findLegacyData().then(function(old){
+    if(!old||!old.tabs||!old.tabs.length){
+      console.warn('[RESTORE] No legacy data found in any path');
+      showToast('⚠ 復元できるデータが見つかりませんでした');
+      if(btn){btn.disabled=false;btn.textContent='データを復元する';}
+      return;
+    }
+    console.log('[RESTORE] ✅ Found data: tabs='+old.tabs.length+' tasks='+(old.tasks||[]).length);
+
+    // ① Firebase の現在UID パスに書き込む（SDK使用）
+    _fbDb.ref('users/'+CURRENT_UID+'/data').set(old).then(function(){
+      console.log('[RESTORE] Firebase write OK');
+    }).catch(function(e){
+      console.warn('[RESTORE] Firebase SDK write failed, trying REST:',e.message);
+      fbSave('data',old); // REST fallback
+    });
+
+    // ② localStorage に書き込む
+    try{localStorage.setItem(STATE.DKEY,JSON.stringify(old));}catch(e){}
+
+    // ③ ラベルも移行
+    _refreshToken().then(function(token){
+      LEGACY_PATHS.forEach(function(basePath){
+        var labelsPath=basePath.replace('/data','/labels');
+        _readLegacyViaSDK(labelsPath).then(function(oldL){
+          if(oldL)fbSave('labels',oldL);
+        });
+      });
+    });
+
+    // ④ 画面を即時更新
+    STATE.tabs=old.tabs;
+    STATE.tasks=STATE._normalize(old.tasks||[]);
+    STATE.activeTabId=old.activeTabId||old.tabs[0].id;
+    try{localStorage.setItem(STATE.DKEY,JSON.stringify(old));}catch(e){}
+    document.getElementById('restore-banner').style.display='none';
+    renderTabs();renderMatrix();
+    showToast('✅ データを復元しました！');
+    console.log('[RESTORE] UI updated. tasks='+STATE.tasks.length);
+  }).catch(function(e){
+    console.error('[RESTORE] Fatal error:',e);
+    showToast('復元エラー: '+e.message);
+    if(btn){btn.disabled=false;btn.textContent='データを復元する';}
+  });
+}
+
+/* 起動2秒後: 旧データの存在確認 → バナー表示
+   ★ tasks=0 なら問答無用でバナーを表示（Firebase確認不要） */
+function checkLegacyDataBanner(){
+  if(STATE.tasks.length>0){
+    console.log('[BANNER] Current tasks exist ('+STATE.tasks.length+'), no banner needed');
+    return;
+  }
+  // タスクが0件 → バナーを即表示（旧データがあるかもしれないので）
+  console.log('[BANNER] No tasks found → showing restore banner immediately');
+  var banner=document.getElementById('restore-banner');
+  if(banner)banner.style.display='flex';
 }
 
 /* =====================================================
