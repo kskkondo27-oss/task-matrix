@@ -491,12 +491,19 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
   </div>
 </header>
 
-<!-- ===== データ復元バナー（過去データがある場合に自動表示） ===== -->
-<div id="restore-banner" style="display:none;background:#fffbeb;border-bottom:2px solid #fcd34d;padding:10px 24px;display:none;align-items:center;gap:12px;font-size:13px">
-  <span style="font-size:18px">⚠️</span>
-  <span style="font-weight:600;color:#92400e">過去のデータが見つかりました。以下のボタンで復元できます。</span>
-  <button id="restore-btn" style="padding:7px 18px;background:#d97706;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">データを復元する</button>
-  <button onclick="document.getElementById('restore-banner').style.display='none'" style="padding:7px 12px;background:none;border:1px solid #fcd34d;border-radius:8px;font-size:12px;cursor:pointer;color:#92400e;font-family:inherit">閉じる</button>
+<!-- ===== データ復元バナー（タスク0件の場合に自動表示） ===== -->
+<div id="restore-banner" style="display:none;background:#fffbeb;border-bottom:2px solid #fcd34d;padding:12px 24px;align-items:flex-start;gap:12px;font-size:13px;flex-wrap:wrap">
+  <span style="font-size:20px;flex-shrink:0;margin-top:1px">⚠️</span>
+  <div style="flex:1;min-width:200px">
+    <div style="font-weight:700;color:#92400e;margin-bottom:4px">データが見つかりません</div>
+    <div style="color:#78350f;font-size:12px;margin-bottom:8px">ログイン中: <strong id="banner-email" style="color:#4f46e5"></strong></div>
+    <div style="color:#78350f;font-size:12px">別のデバイスで別のGoogleアカウントを使用している可能性があります。<br>正しいアカウントでログインし直すか、データを復元してください。</div>
+  </div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+    <button id="restore-btn" style="padding:8px 18px;background:#d97706;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">旧データを復元する</button>
+    <button id="banner-switch-btn" style="padding:8px 14px;background:#6366f1;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">アカウントを切り替える</button>
+    <button onclick="document.getElementById('restore-banner').style.display='none'" style="padding:8px 12px;background:none;border:1px solid #fcd34d;border-radius:8px;font-size:12px;cursor:pointer;color:#92400e;font-family:inherit">閉じる</button>
+  </div>
 </div>
 
 <!-- ===== Tab bar ===== -->
@@ -762,6 +769,7 @@ var CURRENT_UID=null;
 var _authToken=null;
 var _esMap={};
 var _isFirstLoad=false; // 初回ロード（新規ユーザー）フラグ
+var _autoRestoreAttempted=false; // 自動復元を1回だけ実行するためのフラグ
 
 /* =====================================================
    ワークスペース管理
@@ -1079,9 +1087,10 @@ var STATE={
     fbLoad('data').then(function(d){
       if(loadToken!==_wsToken)return;
       if(d===null){
-        // ★ ネットワーク障害・認証エラー → データ保護のため何もしない＋警告表示
-        console.warn('[STATE.load] Firebase returned null（認証エラーまたはネットワーク障害）- save skipped');
-        showToast('⚠ データの読み込みに失敗しました。再読み込みしてください。');
+        // Firebase read 失敗（認証エラー or ネットワーク障害）
+        console.warn('[STATE.load] Firebase returned null → triggering auto-restore');
+        // ローカルにもデータがなければ旧パスから復元を試みる
+        if(snap.tasks.length===0) _tryAutoRestore();
         return;
       }
       console.log('[STATE.load] Firebase response: tabs='+(d&&d.tabs?d.tabs.length:'none')+' tasks='+(d&&d.tasks?d.tasks.length:'none'));
@@ -1097,20 +1106,20 @@ var STATE={
         renderTabs();renderMatrix();
         var fbN=(d.tasks||[]).length;
         if(fbN!==localN)showToast('クラウドから同期しました ✓');
+        // タスクが0件なら旧パスから自動復元を試みる
+        if(self.tasks.length===0){
+          console.log('[STATE.load] Firebase has tabs but no tasks → triggering auto-restore');
+          _tryAutoRestore();
+        }
       } else {
-        // Firebase が空 → ★ タスクが実際にある場合のみ Firebase へ書き込む（空データの誤上書きを防止）
-        console.log('[STATE.load] Firebase empty for this UID (new workspace or data not found)');
+        // Firebase が空（パス未存在）→ 旧パスから自動復元を試みる
+        console.log('[STATE.load] Firebase empty for this UID → triggering auto-restore');
         if(snap.tasks.length>0){
           // ローカルにタスクがある → Firebase へ書き込む
           fbSave('data',snap);
           console.log('[STATE.load] Saved local data to Firebase: tasks='+snap.tasks.length);
         } else {
-          // ローカルも Firebase も空 → 初回アクセス時のみ空タブを Firebase に記録
-          // ★ ただし既存セッションで誤ってここに来た場合を防ぐため、initialLoad フラグで制御
-          if(_isFirstLoad){
-            fbSave('data',snap);
-            console.log('[STATE.load] First load - saved empty workspace to Firebase');
-          }
+          _tryAutoRestore();
         }
       }
     });
@@ -2676,8 +2685,12 @@ function initApp(){
   // データ復元バナー
   var restoreBtn=document.getElementById('restore-btn');
   if(restoreBtn)restoreBtn.addEventListener('click',forceRestoreFromLegacy);
-  // 2秒後にチェック（Firebase読み込みを待つ）
-  setTimeout(checkLegacyDataBanner,2000);
+  // バナー内のアカウント切替ボタン
+  var bannerSwitchBtn=document.getElementById('banner-switch-btn');
+  if(bannerSwitchBtn)bannerSwitchBtn.addEventListener('click',function(){
+    document.getElementById('restore-banner').style.display='none';
+    _fbAuth.signOut();
+  });
 }
 
 /* 旧データ（/unashi/）を新パスに移行
@@ -2710,6 +2723,8 @@ function migrateLegacyData(cb){
         if(old&&old.tabs&&old.tabs.length){
           console.log('[MIGRATE] Legacy data found! tabs='+old.tabs.length+' tasks='+(old.tasks||[]).length+' → migrating to current UID');
           fbSave('data',old);
+          // ★ localStorageにも即書き込み（STATE.loadのレース条件を防ぐ）
+          try{localStorage.setItem('tm-data-v3-'+CURRENT_UID,JSON.stringify(old));}catch(e){}
           fetch(oldLabelsUrl).then(function(r){return r.ok?r.json():null;}).then(function(oldL){
             if(oldL)fbSave('labels',oldL);
             showToast('✅ 既存データを復元しました！');
@@ -2776,6 +2791,60 @@ function _findLegacyData(){
         return fn();
       });
     },Promise.resolve(null));
+  });
+}
+
+/* ★ 自動復元: STATE.load() がタスク0件を検知したら自動で呼ばれる
+   旧パス(/unashi/data, /workspace1/data)からデータを探して自動復元する。
+   見つかった場合はユーザー操作なしで復元、見つからない場合はバナーを表示。 */
+function _tryAutoRestore(){
+  if(_autoRestoreAttempted)return; // 1回だけ実行
+  _autoRestoreAttempted=true;
+  console.log('[AUTO-RESTORE] Starting auto-restore for UID:',CURRENT_UID);
+
+  // バナーにメールアドレスをセット
+  var bannerEmail=document.getElementById('banner-email');
+  if(bannerEmail){
+    var cu=_fbAuth.currentUser;
+    bannerEmail.textContent=(cu&&cu.email)?cu.email:'(不明)';
+  }
+
+  _findLegacyData().then(function(old){
+    if(old&&old.tabs&&old.tabs.length&&(old.tasks||[]).length>0){
+      // ✅ 旧データ発見 → 自動復元
+      console.log('[AUTO-RESTORE] ✅ Found data: tasks='+(old.tasks||[]).length+' → restoring automatically');
+
+      // ① Firebase 書き込み（SDK優先・RESフォールバック）
+      _fbDb.ref('users/'+CURRENT_UID+'/data').set(old).catch(function(){fbSave('data',old);});
+
+      // ② localStorage にも書き込む（次回起動で即座にロードできるよう）
+      try{localStorage.setItem(STATE.DKEY,JSON.stringify(old));}catch(e){}
+
+      // ③ ラベルも移行
+      LEGACY_PATHS.forEach(function(basePath){
+        _readLegacyViaSDK(basePath.replace('/data','/labels')).then(function(oldL){
+          if(oldL)fbSave('labels',oldL);
+        });
+      });
+
+      // ④ STATE と UI を即時更新
+      STATE.tabs=old.tabs;
+      STATE.tasks=STATE._normalize(old.tasks||[]);
+      STATE.activeTabId=old.activeTabId||old.tabs[0].id;
+      renderTabs();renderMatrix();
+      showToast('✅ データを自動復元しました！');
+      console.log('[AUTO-RESTORE] UI updated. tasks='+STATE.tasks.length);
+    } else {
+      // ❌ 旧データなし → バナーを表示してユーザーに手動操作を促す
+      console.log('[AUTO-RESTORE] No legacy data found → showing banner');
+      var banner=document.getElementById('restore-banner');
+      if(banner)banner.style.display='flex';
+    }
+  }).catch(function(e){
+    console.error('[AUTO-RESTORE] Error:',e);
+    // エラーでもバナーを表示
+    var banner=document.getElementById('restore-banner');
+    if(banner)banner.style.display='flex';
   });
 }
 
@@ -2982,6 +3051,8 @@ document.addEventListener('DOMContentLoaded',function(){
       console.log('========================================');
       CURRENT_UID=user.uid;
       _isFirstLoad=false; // ログイン毎にリセット
+      _autoRestoreAttempted=false; // ログイン毎にリセット（新しいセッションで復元を再試行）
+      _appInited=false; // ログイン毎にinitAppを再実行可能にする
       _refreshToken().then(function(token){
         console.log('[AUTH] Token refresh:', token?'SUCCESS ('+token.substring(0,20)+'...)':'FAILED (null)');
         if(!token){
