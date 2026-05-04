@@ -490,6 +490,14 @@ html,body{height:100%;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","H
   </div>
 </header>
 
+<!-- ===== データ復元バナー（過去データがある場合に自動表示） ===== -->
+<div id="restore-banner" style="display:none;background:#fffbeb;border-bottom:2px solid #fcd34d;padding:10px 24px;display:none;align-items:center;gap:12px;font-size:13px">
+  <span style="font-size:18px">⚠️</span>
+  <span style="font-weight:600;color:#92400e">過去のデータが見つかりました。以下のボタンで復元できます。</span>
+  <button id="restore-btn" style="padding:7px 18px;background:#d97706;color:#fff;border:none;border-radius:8px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">データを復元する</button>
+  <button onclick="document.getElementById('restore-banner').style.display='none'" style="padding:7px 12px;background:none;border:1px solid #fcd34d;border-radius:8px;font-size:12px;cursor:pointer;color:#92400e;font-family:inherit">閉じる</button>
+</div>
+
 <!-- ===== Tab bar ===== -->
 <div class="tab-bar" id="tab-bar"></div>
 
@@ -2662,24 +2670,32 @@ function initApp(){
   // グループ設定モーダル（Phase 3）
   document.getElementById('gsettings-close-btn').addEventListener('click',closeGroupSettings);
   document.getElementById('gsettings-ov').addEventListener('click',function(e){if(e.target===document.getElementById('gsettings-ov'))closeGroupSettings();});
+
+  // データ復元バナー
+  var restoreBtn=document.getElementById('restore-btn');
+  if(restoreBtn)restoreBtn.addEventListener('click',forceRestoreFromLegacy);
+  // 2秒後にチェック（Firebase読み込みを待つ）
+  setTimeout(checkLegacyDataBanner,2000);
 }
 
-/* 旧データ（/unashi/）を新パスに一回だけ移行
-   ★ 認証トークン付きで /unashi/ を読む（Firebase ルールで auth != null の読み取りを許可） */
+/* 旧データ（/unashi/）を新パスに移行
+   ★ 判定: タスクが1件以上ある場合のみ「移行済み」と判断（空タブだけでは移行をスキップしない）
+   ★ 認証トークン付きで /unashi/ を読む */
 function migrateLegacyData(cb){
   fbLoad('data').then(function(existing){
-    // ★ null = 認証エラーまたはネットワーク障害 → 移行操作を一切行わずに続行
+    // null = 認証エラー/ネットワーク障害 → スキップ
     if(existing===null){
-      console.warn('[MIGRATE] Firebase returned null (auth error or network failure) - skipping migration entirely');
+      console.warn('[MIGRATE] Firebase returned null - skipping');
       cb();return;
     }
-    // 新パスにデータあり → 移行不要
-    if(existing&&existing.tabs&&existing.tabs.length){
-      console.log('[MIGRATE] Existing data found (tabs='+existing.tabs.length+'), no migration needed');
+    // ★ タスクが1件以上ある場合のみ移行不要と判断（空の「全体」タブだけでは不十分）
+    var hasRealData=existing&&existing.tasks&&existing.tasks.length>0;
+    if(hasRealData){
+      console.log('[MIGRATE] Real data found (tasks='+existing.tasks.length+'), no migration needed');
       cb();return;
     }
-    // 新パスにデータなし → 旧パス（/unashi/）を認証トークン付きで確認
-    console.log('[MIGRATE] No data at current UID path, checking legacy /unashi/ path with auth...');
+    // タスクなし（新規UID or 空タブのみ）→ 旧パスを確認
+    console.log('[MIGRATE] No tasks found at current UID. Checking /unashi/ for legacy data...');
     _isFirstLoad=true;
     _refreshToken().then(function(t){
       // ★ 認証トークン付きで読み込む（ルールで auth != null を許可）
@@ -2706,6 +2722,66 @@ function migrateLegacyData(cb){
         cb();
       });
     });
+  });
+}
+
+/* =====================================================
+   強制データ復元（/unashi/ → 現在のUID）
+===================================================== */
+function forceRestoreFromLegacy(){
+  var btn=document.getElementById('restore-btn');
+  if(btn){btn.disabled=true;btn.textContent='復元中...';}
+  _refreshToken().then(function(t){
+    if(!t){showToast('認証エラー。再ログインしてください。');return;}
+    var dataUrl=FB+'/unashi/data.json?auth='+t;
+    var labelsUrl=FB+'/unashi/labels.json?auth='+t;
+    fetch(dataUrl).then(function(r){
+      console.log('[RESTORE] /unashi/data status:',r.status);
+      return r.ok?r.json():null;
+    }).then(function(old){
+      if(!old||!old.tabs||!old.tabs.length){
+        showToast('⚠ 旧データが見つかりませんでした');
+        if(btn){btn.disabled=false;btn.textContent='データを復元する';}
+        return;
+      }
+      console.log('[RESTORE] Found legacy data: tabs='+old.tabs.length+' tasks='+(old.tasks||[]).length);
+      // 現在のUIDのFirebaseパスに書き込む
+      fbSave('data',old);
+      // localStorageも更新
+      try{localStorage.setItem(STATE.DKEY,JSON.stringify(old));}catch(e){}
+      // ラベルも移行
+      fetch(labelsUrl).then(function(r){return r.ok?r.json():null;}).then(function(oldL){
+        if(oldL)fbSave('labels',oldL);
+      }).catch(function(){});
+      showToast('✅ データを復元しました！ページを再読み込みします...');
+      document.getElementById('restore-banner').style.display='none';
+      // STATEを即時更新して再描画
+      STATE.tabs=old.tabs;
+      STATE.tasks=STATE._normalize(old.tasks);
+      STATE.activeTabId=old.activeTabId||old.tabs[0].id;
+      renderTabs();renderMatrix();
+      // 3秒後に完全リロードして確実に反映
+      setTimeout(function(){location.reload();},3000);
+    }).catch(function(e){
+      console.error('[RESTORE] Error:',e);
+      showToast('復元に失敗しました: '+e.message);
+      if(btn){btn.disabled=false;btn.textContent='データを復元する';}
+    });
+  });
+}
+
+/* 起動時に旧データの存在確認 → バナー表示 */
+function checkLegacyDataBanner(){
+  if(STATE.tasks.length>0)return; // 現在のデータがあれば不要
+  _refreshToken().then(function(t){
+    if(!t)return;
+    fetch(FB+'/unashi/data.json?auth='+t).then(function(r){return r.ok?r.json():null;}).then(function(old){
+      if(old&&old.tabs&&old.tabs.length&&(old.tasks||[]).length>0){
+        console.log('[BANNER] Legacy data found, showing restore banner');
+        var banner=document.getElementById('restore-banner');
+        if(banner)banner.style.display='flex';
+      }
+    }).catch(function(){});
   });
 }
 
